@@ -25,7 +25,16 @@ plugin is needed.
 
 ## Development
 
-To be filled in once the project is scaffolded (build, test, run, Docker commands).
+Requires the .NET 10 SDK (`global.json`).
+
+```bash
+dotnet build                      # build the solution
+dotnet test                       # run all tests
+dotnet run --project src/Slskarr  # run (needs Slskarr__Slskd__Url and Slskarr__Slskd__ApiKey)
+```
+
+Configuration binds from the `Slskarr` section; env vars use `Slskarr__Section__Key`
+(e.g. `Slskarr__Slskd__Url`). Docker commands arrive with the image task.
 
 ## Conventions
 
