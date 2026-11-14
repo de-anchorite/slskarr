@@ -1,0 +1,12 @@
+# Local-only design specs and plans (never commit)
+docs/superpowers/
+
+# .NET
+bin/
+obj/
+*.user
+.vs/
+.idea/
+
+# SDD scratch workspace (never commit)
+.superpowers/
