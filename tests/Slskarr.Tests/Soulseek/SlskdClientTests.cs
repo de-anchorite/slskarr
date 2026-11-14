@@ -66,16 +66,32 @@ public sealed class SlskdClientTests : IDisposable
         handler.Requests[0].Method.ShouldBe(HttpMethod.Delete);
     }
 
-    [Fact]
-    public async Task DeleteIncompleteDir_uses_incomplete_route()
+    [Theory]
+    [InlineData(204, SlskdDeleteResult.Deleted)]
+    [InlineData(404, SlskdDeleteResult.NotFound)]
+    [InlineData(403, SlskdDeleteResult.Forbidden)]
+    public async Task DeleteIncompleteFile_uses_escaped_base64_file_route(int status, SlskdDeleteResult expected)
     {
-        var handler = new RecordingHandler(HttpStatusCode.NoContent);
+        const string file = "bob/Books/A - B (ü).epub";
+        var handler = new RecordingHandler((HttpStatusCode)status);
         var client = new SlskdClient(new HttpClient(handler) { BaseAddress = new Uri("http://slskd.test/") }, _time);
 
-        (await client.DeleteIncompleteDirAsync(Dest, default)).ShouldBe(SlskdDeleteResult.Deleted);
+        (await client.DeleteIncompleteFileAsync(file, default)).ShouldBe(expected);
 
-        handler.Requests.ShouldHaveSingleItem().RequestUri!.AbsoluteUri
-            .ShouldBe($"http://slskd.test/api/v0/files/incomplete/directories/{B64(Dest)}");
+        var request = handler.Requests.ShouldHaveSingleItem();
+        request.Method.ShouldBe(HttpMethod.Delete);
+        request.RequestUri!.AbsoluteUri.ShouldBe($"http://slskd.test/api/v0/files/incomplete/files/{B64(file)}");
+    }
+
+    [Fact]
+    public async Task DeleteIncompleteFile_route_matches_wiremock()
+    {
+        const string file = "bob/Books/A - B.epub";
+        _server.Given(Request.Create().WithPath($"/api/v0/files/incomplete/files/{Convert.ToBase64String(Encoding.UTF8.GetBytes(file))}").UsingDelete())
+            .RespondWith(Response.Create().WithStatusCode(204));
+
+        (await Client().DeleteIncompleteFileAsync(file, default)).ShouldBe(SlskdDeleteResult.Deleted);
+        ShouldCarryKey(Only());
     }
 
     [Fact]

@@ -59,10 +59,12 @@ public sealed class DownloadHarness : IDisposable
 
     public DownloadMonitor Monitor { get; }
 
-    public static HitEntity NewHit(string id) => new()
+    public const string IncompleteFile = "peer/Books/Frank Herbert/Frank Herbert - Dune (1965).epub";
+
+    public static HitEntity NewHit(string id, string searchKey = "k") => new()
     {
         Id = id,
-        SearchKey = "k",
+        SearchKey = searchKey,
         Profile = "ebook",
         Username = "peer",
         RemotePath = RemotePath,
@@ -115,7 +117,10 @@ public sealed class FakeDownloadSlskd : ISlskdClient
 
     public List<string> DeletedDownloadDirs { get; } = [];
 
-    public List<string> DeletedIncompleteDirs { get; } = [];
+    public List<string> DeletedIncompleteFiles { get; } = [];
+
+    /// <summary>Cancels and file deletes, in call order.</summary>
+    public List<string> Calls { get; } = [];
 
     public Dictionary<string, IReadOnlyList<SlskdLocalFile>?> Dirs { get; } = [];
 
@@ -212,6 +217,7 @@ public sealed class FakeDownloadSlskd : ISlskdClient
     public Task CancelDownloadAsync(string username, Guid transferId, bool remove, CancellationToken ct)
     {
         Cancels.Add((transferId, remove));
+        Calls.Add("cancel");
         return Task.CompletedTask;
     }
 
@@ -221,12 +227,14 @@ public sealed class FakeDownloadSlskd : ISlskdClient
     public Task<SlskdDeleteResult> DeleteDownloadDirAsync(string relativeDir, CancellationToken ct)
     {
         DeletedDownloadDirs.Add(relativeDir);
+        Calls.Add("delete-download-dir");
         return Task.FromResult(DeleteResult);
     }
 
-    public Task<SlskdDeleteResult> DeleteIncompleteDirAsync(string relativeDir, CancellationToken ct)
+    public Task<SlskdDeleteResult> DeleteIncompleteFileAsync(string relativePath, CancellationToken ct)
     {
-        DeletedIncompleteDirs.Add(relativeDir);
+        DeletedIncompleteFiles.Add(relativePath);
+        Calls.Add("delete-incomplete-file");
         return Task.FromResult(DeleteResult);
     }
 

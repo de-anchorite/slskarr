@@ -150,7 +150,7 @@ public sealed class SlskdClient(HttpClient http, TimeProvider time) : ISlskdClie
 
     public async Task<IReadOnlyList<SlskdLocalFile>?> ListDownloadDirAsync(string relativeDir, CancellationToken ct)
     {
-        var path = $"files/downloads/directories/{EncodeDir(relativeDir)}?recursive=true";
+        var path = $"files/downloads/directories/{EncodePath(relativeDir)}?recursive=true";
         using var response = await SendAsync(() => Req(HttpMethod.Get, path), ct);
         if (response.StatusCode == HttpStatusCode.NotFound)
         {
@@ -165,12 +165,12 @@ public sealed class SlskdClient(HttpClient http, TimeProvider time) : ISlskdClie
     }
 
     public Task<SlskdDeleteResult> DeleteDownloadDirAsync(string relativeDir, CancellationToken ct) =>
-        DeleteDirAsync($"files/downloads/directories/{EncodeDir(relativeDir)}", ct);
+        DeleteAsync($"files/downloads/directories/{EncodePath(relativeDir)}", ct);
 
-    public Task<SlskdDeleteResult> DeleteIncompleteDirAsync(string relativeDir, CancellationToken ct) =>
-        DeleteDirAsync($"files/incomplete/directories/{EncodeDir(relativeDir)}", ct);
+    public Task<SlskdDeleteResult> DeleteIncompleteFileAsync(string relativePath, CancellationToken ct) =>
+        DeleteAsync($"files/incomplete/files/{EncodePath(relativePath)}", ct);
 
-    private async Task<SlskdDeleteResult> DeleteDirAsync(string path, CancellationToken ct)
+    private async Task<SlskdDeleteResult> DeleteAsync(string path, CancellationToken ct)
     {
         using var response = await SendAsync(() => Req(HttpMethod.Delete, path), ct);
         switch (response.StatusCode)
@@ -185,8 +185,9 @@ public sealed class SlskdClient(HttpClient http, TimeProvider time) : ISlskdClie
         }
     }
 
-    private static string EncodeDir(string relativeDir) =>
-        Uri.EscapeDataString(Convert.ToBase64String(Encoding.UTF8.GetBytes(relativeDir)));
+    /// <summary>The files API takes a relative directory or file as URL-escaped base64 in one route segment.</summary>
+    private static string EncodePath(string relativePath) =>
+        Uri.EscapeDataString(Convert.ToBase64String(Encoding.UTF8.GetBytes(relativePath)));
 
     private static void Flatten(DirDto dir, List<SlskdLocalFile> into)
     {

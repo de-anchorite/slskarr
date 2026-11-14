@@ -98,6 +98,12 @@ public sealed class ChaptarrClient(HttpClient http, string apiKey, FakeTimeProvi
         Require(json);
     }
 
+    public async Task RemoveFromQueueAsync(string nzoId, bool deleteData)
+    {
+        var json = await SabAsync(HttpMethod.Get, $"mode=queue&name=delete&del_files={(deleteData ? 1 : 0)}&value={nzoId}");
+        Require(json);
+    }
+
     public async Task<string> RetryAsync(string nzoId)
     {
         var json = await SabAsync(HttpMethod.Get, $"mode=retry&value={nzoId}");

@@ -1,11 +1,11 @@
 using System.Text;
 using System.Text.Json;
-using System.Text.RegularExpressions;
 using Microsoft.AspNetCore.Builder;
 using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.Routing;
 using Microsoft.AspNetCore.TestHost;
 using Microsoft.Extensions.Logging;
+using Slskarr.Downloads;
 
 namespace Slskarr.IntegrationTests;
 
@@ -21,7 +21,7 @@ namespace Slskarr.IntegrationTests;
 /// <c>downloads/&lt;batch destination&gt;/&lt;file&gt;</c> (slskd <c>DownloadService</c> + <c>FileService.MoveFile</c>).
 /// Time is the given <see cref="TimeProvider"/>, shared with the Slskarr host.
 /// </remarks>
-public sealed partial class FakeSlskd : IDisposable
+public sealed class FakeSlskd : IDisposable
 {
     public sealed record RecordedRequest(string Method, string Path, string Query, string Body);
 
@@ -79,6 +79,19 @@ public sealed partial class FakeSlskd : IDisposable
             {
                 RefreshTransfers();
                 return [.. _downloads.Keys];
+            }
+        }
+    }
+
+    /// <summary>Partial files under slskd's incomplete directory, as relative paths with '/' separators.</summary>
+    public IReadOnlyList<string> IncompleteFiles
+    {
+        get
+        {
+            lock (_lock)
+            {
+                RefreshTransfers();
+                return [.. _incomplete.Keys];
             }
         }
     }
@@ -224,7 +237,7 @@ public sealed partial class FakeSlskd : IDisposable
         });
 
         api.MapDelete("/files/downloads/directories/{dir}", (string dir) => DeleteDir(_downloads, dir));
-        api.MapDelete("/files/incomplete/directories/{dir}", (string dir) => DeleteDir(_incomplete, dir));
+        api.MapDelete("/files/incomplete/files/{file}", (string file) => DeleteFile(_incomplete, file));
     }
 
     private IResult Enqueue(JsonElement body)
@@ -281,6 +294,20 @@ public sealed partial class FakeSlskd : IDisposable
             }
 
             return under.Count > 0 ? Results.NoContent() : Results.NotFound();
+        }
+    }
+
+    private IResult DeleteFile(SortedDictionary<string, long> root, string file)
+    {
+        lock (_lock)
+        {
+            if (!RemoteFileManagement)
+            {
+                return Results.StatusCode(403);
+            }
+
+            RefreshTransfers();
+            return root.Remove(Decode(file).TrimStart('/')) ? Results.NoContent() : Results.NotFound();
         }
     }
 
@@ -409,22 +436,13 @@ public sealed partial class FakeSlskd : IDisposable
     /// <summary>slskd's <c>FileSafety.GetFileNameSafely</c> on Linux: the last segment after either slash.</summary>
     private static string FileName(string remotePath) => remotePath.Split('\\', '/')[^1];
 
-    /// <summary>slskd: <c>incomplete/&lt;username&gt;/&lt;remote directory without its root&gt;/&lt;file&gt;</c>.</summary>
-    private static string IncompletePath(Transfer t)
-    {
-        var unrooted = SoulseekQtRoot().Replace(UncRoot().Replace(DriveRoot().Replace(t.Filename.Replace('\\', '/'), ""), ""), "");
-        var segments = unrooted.Split('/', StringSplitOptions.RemoveEmptyEntries);
-        return string.Join('/', [t.Username.Replace('/', '_'), .. segments]);
-    }
-
-    [GeneratedRegex(@"^[a-zA-Z]:[/\\]?")]
-    private static partial Regex DriveRoot();
-
-    [GeneratedRegex(@"^[/\\]{2}[^/\\]+[/\\]?")]
-    private static partial Regex UncRoot();
-
-    [GeneratedRegex(@"^@@[a-zA-Z0-9]{5,}[\/\\]?")]
-    private static partial Regex SoulseekQtRoot();
+    /// <summary>
+    /// slskd: <c>incomplete/&lt;username&gt;/&lt;remote directory without its root&gt;/&lt;file&gt;</c>. The layout rules
+    /// (root stripping, segment sanitising) are pinned against slskd's <c>FileSafety</c> by <c>StoragePathsTests</c>.
+    /// </summary>
+    private static string IncompletePath(Transfer t) =>
+        StoragePaths.IncompleteFile(t.Username, t.Filename)
+            ?? throw new InvalidOperationException($"slskd would not download '{t.Filename}': it names no file");
 
     private sealed record Search(Guid Id, string Text, DateTimeOffset StartedAt);
 

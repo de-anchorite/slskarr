@@ -250,5 +250,5 @@ public sealed class FakeSearchSlskd(TimeProvider time) : ISlskdClient
 
     public Task<SlskdDeleteResult> DeleteDownloadDirAsync(string relativeDir, CancellationToken ct) => throw new NotSupportedException();
 
-    public Task<SlskdDeleteResult> DeleteIncompleteDirAsync(string relativeDir, CancellationToken ct) => throw new NotSupportedException();
+    public Task<SlskdDeleteResult> DeleteIncompleteFileAsync(string relativePath, CancellationToken ct) => throw new NotSupportedException();
 }

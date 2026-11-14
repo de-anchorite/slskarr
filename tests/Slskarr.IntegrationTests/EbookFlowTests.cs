@@ -184,6 +184,28 @@ public sealed class EbookFlowTests : IDisposable
         Posts(BatchesPath).Count.ShouldBe(1);
     }
 
+    [Fact]
+    public async Task Queue_delete_with_files_removes_the_partial_file()
+    {
+        _slskd.ScriptTransfer(_ =>
+        [
+            new(TimeSpan.Zero, "Queued, Remotely"),
+            new(TimeSpan.FromSeconds(10), "InProgress", Bytes: Size / 4),
+        ]);
+        var chaptarr = Start();
+        var nzoId = await GrabTopAsync(chaptarr);
+        await PollUntil(async () => (await chaptarr.QueueAsync()).Any(s => s.NzoId == nzoId && s.Status == "Downloading"),
+            "the transfer is in progress");
+        _slskd.IncompleteFiles.ShouldBe([$"{Peer}/Books/{Author}/{DuneEpubFile}"]);
+
+        await chaptarr.RemoveFromQueueAsync(nzoId, deleteData: true);
+
+        (await chaptarr.QueueAsync()).ShouldBeEmpty();
+        (await chaptarr.HistoryAsync()).ShouldBeEmpty();
+        _slskd.IncompleteFiles.ShouldBeEmpty();
+        _slskd.Requests.ShouldContain(r => r.Method == "DELETE" && r.Path.StartsWith("/api/v0/files/incomplete/files/", StringComparison.Ordinal));
+    }
+
     public void Dispose()
     {
         _http?.Dispose();

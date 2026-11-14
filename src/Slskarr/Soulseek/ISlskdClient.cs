@@ -33,5 +33,5 @@ public interface ISlskdClient
 
     Task<SlskdDeleteResult> DeleteDownloadDirAsync(string relativeDir, CancellationToken ct);
 
-    Task<SlskdDeleteResult> DeleteIncompleteDirAsync(string relativeDir, CancellationToken ct);
+    Task<SlskdDeleteResult> DeleteIncompleteFileAsync(string relativePath, CancellationToken ct);
 }

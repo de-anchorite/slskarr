@@ -98,21 +98,55 @@ public sealed class DownloadManagerTests : IDisposable
         (await _h.Manager.DeleteAsync(DownloadManager.NzoId(completed.Id), true, CancellationToken.None)).ShouldBeTrue();
 
         _h.Slskd.DeletedDownloadDirs.ShouldBe(["slskarr/" + completed.Id.ToString("N")]);
-        _h.Slskd.DeletedIncompleteDirs.ShouldBeEmpty();
+        _h.Slskd.DeletedIncompleteFiles.ShouldBeEmpty();
         _h.Slskd.Cancels.ShouldContain((_h.Slskd.TransferIdFor(completed.BatchId), true));
         _h.Job(completed.Id).State.ShouldBe(DownloadState.Deleted);
     }
 
     [Fact]
-    public async Task Delete_failed_with_files_calls_incomplete_delete()
+    public async Task Delete_failed_with_files_deletes_only_the_partial_file()
     {
         _h.Slskd.EnqueueError = "peer offline";
         var job = await _h.AddJob();
 
         (await _h.Manager.DeleteAsync(DownloadManager.NzoId(job.Id), true, CancellationToken.None)).ShouldBeTrue();
 
-        _h.Slskd.DeletedIncompleteDirs.ShouldBe(["slskarr/" + job.Id.ToString("N")]);
+        _h.Slskd.DeletedIncompleteFiles.ShouldBe([DownloadHarness.IncompleteFile]);
         _h.Slskd.DeletedDownloadDirs.ShouldBeEmpty();
+    }
+
+    [Fact]
+    public async Task Delete_downloading_with_files_cancels_then_deletes_the_partial_file()
+    {
+        var job = await _h.AddJob();
+        _h.Slskd.SetTransfer(job.BatchId, "InProgress", 100);
+        await _h.Poll();
+
+        (await _h.Manager.DeleteAsync(DownloadManager.NzoId(job.Id), true, CancellationToken.None)).ShouldBeTrue();
+
+        _h.Slskd.Calls.ShouldBe(["cancel", "delete-incomplete-file"]);
+        _h.Slskd.DeletedIncompleteFiles.ShouldBe([DownloadHarness.IncompleteFile]);
+        _h.Job(job.Id).State.ShouldBe(DownloadState.Deleted);
+    }
+
+    [Fact]
+    public async Task Delete_keeps_a_partial_file_another_live_job_shares()
+    {
+        await using (var db = await _h.Db.CreateDbContextAsync())
+        {
+            db.Hits.Add(DownloadHarness.NewHit("hit-dune-other-search", searchKey: "other"));
+            await db.SaveChangesAsync();
+        }
+
+        var first = await _h.AddJob();
+        var second = DownloadManager.ParseNzoId(
+            (await _h.Manager.AddAsync("hit-dune-other-search", "ebooks", CancellationToken.None)).NzoId!)!.Value;
+
+        await _h.Manager.DeleteAsync(DownloadManager.NzoId(first.Id), true, CancellationToken.None);
+        _h.Slskd.DeletedIncompleteFiles.ShouldBeEmpty();
+
+        await _h.Manager.DeleteAsync(DownloadManager.NzoId(second), true, CancellationToken.None);
+        _h.Slskd.DeletedIncompleteFiles.ShouldBe([DownloadHarness.IncompleteFile]);
     }
 
     [Fact]
@@ -124,7 +158,7 @@ public sealed class DownloadManagerTests : IDisposable
         (await _h.Manager.DeleteAsync(DownloadManager.NzoId(job.Id), false, CancellationToken.None)).ShouldBeTrue();
 
         _h.Slskd.DeletedDownloadDirs.ShouldBeEmpty();
-        _h.Slskd.DeletedIncompleteDirs.ShouldBeEmpty();
+        _h.Slskd.DeletedIncompleteFiles.ShouldBeEmpty();
         _h.Slskd.Cancels.ShouldBe([(_h.Slskd.TransferIdFor(job.BatchId), true)]);
         (await _h.Manager.ActiveAsync(null, CancellationToken.None)).ShouldBeEmpty();
         (await _h.Manager.HistoryAsync(null, CancellationToken.None)).ShouldBeEmpty();

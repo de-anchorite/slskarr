@@ -126,10 +126,9 @@ public sealed class DownloadManager(
         {
             try
             {
-                var dir = StoragePaths.JobDir(job.Id);
                 var result = wasState == DownloadState.Completed
-                    ? await slskd.DeleteDownloadDirAsync(dir, ct)
-                    : await slskd.DeleteIncompleteDirAsync(dir, ct);
+                    ? await slskd.DeleteDownloadDirAsync(StoragePaths.JobDir(job.Id), ct)
+                    : await DeletePartialFileAsync(db, job, ct);
                 if (result == SlskdDeleteResult.Forbidden && status.MarkRemoteDeleteForbidden())
                 {
                     logger.LogWarning("Enable remote_file_management in slskd to let Slskarr delete imported files");
@@ -142,6 +141,29 @@ public sealed class DownloadManager(
         }
 
         return true;
+    }
+
+    /// <summary>
+    /// Deletes the job's partial file from slskd's incomplete directory. That directory is shared by everything
+    /// from the same peer folder, so only the one file goes, and not while another live job downloads the same file.
+    /// </summary>
+    private async Task<SlskdDeleteResult?> DeletePartialFileAsync(SlskarrDb db, DownloadJobEntity job, CancellationToken ct)
+    {
+        if (StoragePaths.IncompleteFile(job.Username, job.RemotePath) is not { } file)
+        {
+            return null;
+        }
+
+        var shared = await db.DownloadJobs.AnyAsync(
+            j => j.Id != job.Id && j.State != DownloadState.Deleted && j.Username == job.Username && j.RemotePath == job.RemotePath,
+            ct);
+        if (shared)
+        {
+            logger.LogInformation("Keeping the partial file of {Job}: another download uses it", job.Id);
+            return null;
+        }
+
+        return await slskd.DeleteIncompleteFileAsync(file, ct);
     }
 
     public async Task<AddResult> RetryAsync(string nzoId, CancellationToken ct)
