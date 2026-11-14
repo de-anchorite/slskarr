@@ -40,6 +40,11 @@ docker compose -f examples/docker-compose.yml config   # validate the example st
 Configuration binds from the `Slskarr` section; env vars use `Slskarr__Section__Key`
 (e.g. `Slskarr__Slskd__Url`).
 
+Versioning: the version is not stored in code. It comes from the `v*` git tag: CI passes it as
+`-p:Version` (Docker `VERSION` build arg). Untagged builds are `0.0.0-dev`. `AppVersion.Current`
+exposes it. `develop` is the only long-lived branch: features branch off it, and a release is a `v*` tag on
+`develop`. See README "Versioning and releases".
+
 ## Conventions
 
 - Follow standard .NET conventions (nullable enabled, warnings as errors, file-scoped namespaces).
