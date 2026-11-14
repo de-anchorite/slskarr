@@ -30,9 +30,23 @@ docker run -d --name slskarr -p 8080:8080 \
   ghcr.io/<owner>/slskarr:latest
 ```
 
-The container listens on port 8080 and runs as the non-root `app` user (UID 1654). `/data` (a volume)
-holds the SQLite database. A named volume works as is; a **bind-mounted** `/data` must be writable by
-UID 1654 (for example `chown 1654:1654 /path/to/slskarr-data`).
+The container listens on port 8080 and runs as the non-root `app` user (UID 1654). `/data` holds the
+SQLite database. A named volume (as above) works as is.
+
+**Bind-mounting a host folder** at `/data`: the container's user must be able to write to it. The image
+does not use `PUID`/`PGID`. Either run the container as the folder's owner (usually what you want, and
+what you already use for your other *arr containers):
+
+```bash
+mkdir -p /path/to/slskarr-data            # owned by you; `id` shows your uid:gid
+docker run ... --user 1000:1000 -v /path/to/slskarr-data:/data ...
+```
+
+or in compose, `user: "1000:1000"` on the `slskarr` service. Or keep the default user and hand the
+folder to it: `sudo chown 1654:1654 /path/to/slskarr-data`.
+
+If `/data` is not writable, Slskarr exits at startup with a message naming the folder and the user it
+runs as.
 
 ## slskd setup
 
@@ -66,6 +80,12 @@ UID 1654 (for example `chown 1654:1654 /path/to/slskarr-data`).
 | Category | `ebooks` |
 
 Use the hostname or IP your *arr can reach (`slskarr` is the compose service name).
+
+**Placeholder item:** Chaptarr and Prowlarr only save an indexer whose RSS feed returns at least one
+item, and a fresh Slskarr has none. Until real hits are stored, the feed returns one item titled
+`Slskarr placeholder (no Soulseek results stored yet)`. It doesn't parse as a book, so RSS sync rejects
+it (you may see it in the debug log), and grabbing it fails with "No such item". It stops appearing as
+soon as the first search stores hits.
 
 ## Prowlarr (Generic Newznab)
 
