@@ -1,3 +1,4 @@
+using Microsoft.EntityFrameworkCore;
 using Shouldly;
 using Slskarr.Data;
 using Slskarr.Downloads;
@@ -202,5 +203,196 @@ public sealed class DownloadManagerTests : IDisposable
         _h.Slskd.Cancels.ShouldContain((oldTransfer, true));
         _h.Job(job.Id).SlskdTransferId.ShouldNotBe(oldTransfer);
         _h.Job(job.Id).State.ShouldBe(DownloadState.Queued);
+    }
+
+    private DownloadJobEntity OnlyJob()
+    {
+        using var db = _h.Db.CreateDbContext();
+        return db.DownloadJobs.AsNoTracking().Single();
+    }
+
+    private int JobCount()
+    {
+        using var db = _h.Db.CreateDbContext();
+        return db.DownloadJobs.Count();
+    }
+
+    [Fact]
+    public async Task Add_enqueue_is_not_cancelled_when_the_caller_goes_away()
+    {
+        using var cts = new CancellationTokenSource();
+        var gate = _h.Slskd.EnqueueGate = new TaskCompletionSource();
+        var add = _h.Manager.AddAsync(DownloadHarness.HitId, "ebooks", cts.Token);
+        await SearchHarness.Until(() => _h.Slskd.Enqueues.Count == 1, "the enqueue is in flight");
+
+        await cts.CancelAsync();
+        gate.SetResult();
+        var result = await add.Within();
+
+        result.Ok.ShouldBeTrue();
+        var job = OnlyJob();
+        job.State.ShouldBe(DownloadState.Queued);
+        job.SlskdTransferId.ShouldBe(_h.Slskd.TransferIdFor(job.BatchId));
+    }
+
+    [Fact]
+    public async Task Add_enqueue_timeout_keeps_job_when_slskd_has_the_transfer()
+    {
+        _h.Slskd.EnqueueGate = new TaskCompletionSource(); // never answers
+        _h.Slskd.BatchBeforeFailure = 1;
+        var add = _h.Manager.AddAsync(DownloadHarness.HitId, "ebooks", CancellationToken.None);
+        await SearchHarness.Until(() => _h.Slskd.Enqueues.Count == 1, "the enqueue is in flight");
+
+        _h.Time.Advance(DownloadManager.EnqueueTimeout);
+        var result = await add.Within();
+
+        result.Ok.ShouldBeTrue();
+        var job = OnlyJob();
+        result.NzoId.ShouldBe(DownloadManager.NzoId(job.Id));
+        job.State.ShouldBe(DownloadState.Queued);
+        job.SlskdTransferId.ShouldBe(_h.Slskd.TransferIdFor(job.BatchId));
+    }
+
+    [Fact]
+    public async Task Add_unavailable_keeps_job_when_slskd_has_the_transfer()
+    {
+        _h.Slskd.EnqueueThrows = true;
+        _h.Slskd.BatchBeforeFailure = 1;
+
+        var result = await _h.Manager.AddAsync(DownloadHarness.HitId, "ebooks", CancellationToken.None);
+
+        result.Ok.ShouldBeTrue();
+        var job = OnlyJob();
+        job.State.ShouldBe(DownloadState.Queued);
+        job.SlskdTransferId.ShouldBe(_h.Slskd.TransferIdFor(job.BatchId));
+        _h.Slskd.Enqueues.Count.ShouldBe(1);
+    }
+
+    [Fact]
+    public async Task Add_unavailable_with_empty_batch_stays_queued_until_the_grace_settles_it()
+    {
+        _h.Slskd.EnqueueThrows = true;
+        _h.Slskd.BatchBeforeFailure = 0;
+
+        var result = await _h.Manager.AddAsync(DownloadHarness.HitId, "ebooks", CancellationToken.None);
+
+        result.Ok.ShouldBeTrue();
+        var job = OnlyJob();
+        job.State.ShouldBe(DownloadState.Queued);
+        job.SlskdTransferId.ShouldBeNull();
+
+        await _h.Poll();
+        _h.Job(job.Id).State.ShouldBe(DownloadState.Queued);
+
+        _h.Time.Advance(DownloadMonitor.AddGrace);
+        await _h.Poll();
+        _h.Job(job.Id).State.ShouldBe(DownloadState.Failed);
+    }
+
+    [Fact]
+    public async Task Add_unavailable_without_batch_removes_job_and_throws()
+    {
+        _h.Slskd.EnqueueThrows = true;
+
+        await Should.ThrowAsync<SlskdUnavailableException>(
+            () => _h.Manager.AddAsync(DownloadHarness.HitId, "ebooks", CancellationToken.None));
+
+        JobCount().ShouldBe(0);
+    }
+
+    [Fact]
+    public async Task Add_unavailable_and_probe_fails_removes_job_and_throws()
+    {
+        _h.Slskd.EnqueueThrows = true;
+        _h.Slskd.BatchBeforeFailure = 1;
+        _h.Slskd.Unavailable = true;
+
+        await Should.ThrowAsync<SlskdUnavailableException>(
+            () => _h.Manager.AddAsync(DownloadHarness.HitId, "ebooks", CancellationToken.None));
+
+        JobCount().ShouldBe(0);
+    }
+
+    [Fact]
+    public async Task Add_enqueue_timeout_without_batch_removes_job_and_reports_unavailable()
+    {
+        _h.Slskd.EnqueueGate = new TaskCompletionSource();
+        var add = _h.Manager.AddAsync(DownloadHarness.HitId, "ebooks", CancellationToken.None);
+        await SearchHarness.Until(() => _h.Slskd.Enqueues.Count == 1, "the enqueue is in flight");
+
+        _h.Time.Advance(DownloadManager.EnqueueTimeout);
+
+        await Should.ThrowAsync<SlskdUnavailableException>(() => add.Within());
+        JobCount().ShouldBe(0);
+    }
+
+    private async Task<DownloadJobEntity> FailedJob()
+    {
+        _h.Slskd.EnqueueError = "peer offline";
+        var job = await _h.AddJob();
+        _h.Slskd.EnqueueError = null;
+        return job;
+    }
+
+    [Fact]
+    public async Task Retry_unavailable_keeps_job_when_slskd_has_the_transfer()
+    {
+        var job = await FailedJob();
+        _h.Slskd.EnqueueThrows = true;
+        _h.Slskd.BatchBeforeFailure = 1;
+
+        var result = await _h.Manager.RetryAsync(DownloadManager.NzoId(job.Id), CancellationToken.None);
+
+        result.Ok.ShouldBeTrue();
+        var after = _h.Job(job.Id);
+        after.State.ShouldBe(DownloadState.Queued);
+        after.BatchId.ShouldNotBe(job.BatchId);
+        after.SlskdTransferId.ShouldBe(_h.Slskd.TransferIdFor(after.BatchId));
+    }
+
+    [Fact]
+    public async Task Retry_unavailable_with_empty_batch_stays_queued()
+    {
+        var job = await FailedJob();
+        _h.Slskd.EnqueueThrows = true;
+        _h.Slskd.BatchBeforeFailure = 0;
+
+        (await _h.Manager.RetryAsync(DownloadManager.NzoId(job.Id), CancellationToken.None)).Ok.ShouldBeTrue();
+
+        var after = _h.Job(job.Id);
+        after.State.ShouldBe(DownloadState.Queued);
+        after.SlskdTransferId.ShouldBeNull();
+    }
+
+    [Fact]
+    public async Task Retry_unavailable_without_batch_stays_failed_and_throws()
+    {
+        var job = await FailedJob();
+        _h.Slskd.EnqueueThrows = true;
+
+        await Should.ThrowAsync<SlskdUnavailableException>(
+            () => _h.Manager.RetryAsync(DownloadManager.NzoId(job.Id), CancellationToken.None));
+
+        var after = _h.Job(job.Id);
+        after.State.ShouldBe(DownloadState.Failed);
+        after.BatchId.ShouldBe(job.BatchId);
+    }
+
+    [Fact]
+    public async Task Retry_enqueue_is_not_cancelled_when_the_caller_goes_away()
+    {
+        var job = await FailedJob();
+        using var cts = new CancellationTokenSource();
+        var gate = _h.Slskd.EnqueueGate = new TaskCompletionSource();
+        var retry = _h.Manager.RetryAsync(DownloadManager.NzoId(job.Id), cts.Token);
+        await SearchHarness.Until(() => _h.Slskd.Enqueues.Count == 2, "the retry enqueue is in flight");
+
+        await cts.CancelAsync();
+        gate.SetResult();
+
+        (await retry.Within()).Ok.ShouldBeTrue();
+        var after = _h.Job(job.Id);
+        after.State.ShouldBe(DownloadState.Queued);
+        after.SlskdTransferId.ShouldBe(_h.Slskd.TransferIdFor(after.BatchId));
     }
 }

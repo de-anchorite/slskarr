@@ -18,6 +18,15 @@ public sealed class DownloadManager(
 {
     private const string NzoPrefix = "SLSKARR_";
 
+    /// <summary>
+    /// Upper bound for one batch enqueue. The enqueue does not follow the caller's token: a disconnecting *arr
+    /// must not split an enqueue that slskd may already be acting on.
+    /// </summary>
+    internal static readonly TimeSpan EnqueueTimeout = TimeSpan.FromSeconds(60);
+
+    /// <summary>Upper bound for the batch lookup after an enqueue broke off.</summary>
+    internal static readonly TimeSpan ProbeTimeout = TimeSpan.FromSeconds(15);
+
     // Serialises Add/Retry so concurrent duplicates yield one job and one enqueue.
     private readonly SemaphoreSlim _gate = new(1, 1);
 
@@ -66,19 +75,20 @@ public sealed class DownloadManager(
             db.DownloadJobs.Add(job);
             await db.SaveChangesAsync(ct);
 
+            // From here on the job exists; the caller's token no longer applies.
             try
             {
-                await EnqueueAsync(job, ct);
+                await EnqueueAsync(job);
             }
             catch
             {
-                // slskd unreachable: leave no half-created job so the *arr's retry starts clean.
+                // slskd has no batch for it (or could not say): leave no half-created job so the *arr's retry starts clean.
                 db.DownloadJobs.Remove(job);
                 await db.SaveChangesAsync(CancellationToken.None);
                 throw;
             }
 
-            await db.SaveChangesAsync(ct);
+            await db.SaveChangesAsync(CancellationToken.None);
             return new AddResult(true, NzoId(job.Id), null);
         }
         finally
@@ -166,8 +176,10 @@ public sealed class DownloadManager(
             job.FailMessage = null;
             job.SlskdTransferId = null;
             job.StoragePath = null;
-            await EnqueueAsync(job, ct);
-            await db.SaveChangesAsync(ct);
+
+            // Throws, saving nothing (the job stays Failed), only when slskd has no batch for the retry.
+            await EnqueueAsync(job);
+            await db.SaveChangesAsync(CancellationToken.None);
             return new AddResult(true, NzoId(job.Id), null);
         }
         finally
@@ -176,11 +188,37 @@ public sealed class DownloadManager(
         }
     }
 
-    /// <summary>Enqueues the job's batch and records the outcome on the (tracked) job; the caller saves.</summary>
-    private async Task EnqueueAsync(DownloadJobEntity job, CancellationToken ct)
+    /// <summary>
+    /// Enqueues the job's batch and records the outcome on the (tracked) job; the caller saves. When the enqueue
+    /// breaks off (slskd unreachable or too slow), slskd may still have created the batch, and a second enqueue
+    /// would be refused as already in progress, so the batch is looked up: if slskd has it, the job stays Queued
+    /// (with no transfer yet if the batch is still empty, which the monitor's add grace settles). Throws
+    /// <see cref="SlskdUnavailableException"/> only when slskd has no such batch or cannot be asked.
+    /// </summary>
+    private async Task EnqueueAsync(DownloadJobEntity job)
     {
-        var result = await slskd.EnqueueBatchAsync(
-            job.BatchId, job.Username, job.RemotePath, job.Size, StoragePaths.JobDir(job.Id), ct);
+        SlskdEnqueueResult result;
+        using (var timeout = new CancellationTokenSource(EnqueueTimeout, time))
+        {
+            try
+            {
+                result = await slskd.EnqueueBatchAsync(
+                    job.BatchId, job.Username, job.RemotePath, job.Size, StoragePaths.JobDir(job.Id), timeout.Token);
+            }
+            catch (Exception ex) when (ex is SlskdUnavailableException
+                || (ex is OperationCanceledException && timeout.IsCancellationRequested))
+            {
+                var unavailable = ex as SlskdUnavailableException
+                    ?? new SlskdUnavailableException($"slskd did not answer the enqueue within {EnqueueTimeout}", ex);
+                if (!await AdoptBatchAsync(job))
+                {
+                    throw unavailable;
+                }
+
+                return;
+            }
+        }
+
         if (!result.Ok)
         {
             job.State = DownloadState.Failed;
@@ -189,6 +227,31 @@ public sealed class DownloadManager(
         }
 
         job.SlskdTransferId = result.Batch?.Transfers.FirstOrDefault()?.Id;
+    }
+
+    /// <summary>After a broken-off enqueue: true (transfer id recorded, if any) when slskd has the job's batch.</summary>
+    private async Task<bool> AdoptBatchAsync(DownloadJobEntity job)
+    {
+        using var timeout = new CancellationTokenSource(ProbeTimeout, time);
+        try
+        {
+            var batch = await slskd.GetBatchAsync(job.BatchId, timeout.Token);
+            if (batch is null)
+            {
+                return false;
+            }
+
+            job.SlskdTransferId = batch.Transfers.FirstOrDefault()?.Id;
+            logger.LogInformation("Enqueue for {Job} broke off but slskd has its batch ({Count} transfer(s)); keeping it",
+                job.Id, batch.Transfers.Count);
+            return true;
+        }
+        catch (Exception ex) when (ex is SlskdUnavailableException
+            || (ex is OperationCanceledException && timeout.IsCancellationRequested))
+        {
+            logger.LogWarning(ex, "Could not look up the batch of {Job} after a failed enqueue", job.Id);
+            return false;
+        }
     }
 
     /// <summary>Cancels and clears the job's slskd transfer record (404 is success). Never throws for slskd outages.</summary>

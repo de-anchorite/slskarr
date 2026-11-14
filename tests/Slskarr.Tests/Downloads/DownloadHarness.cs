@@ -131,7 +131,14 @@ public sealed class FakeDownloadSlskd : ISlskdClient
 
     public SlskdDeleteResult DeleteResult { get; set; } = SlskdDeleteResult.Deleted;
 
+    /// <summary>Holds the enqueue (until released or cancelled), as slskd does while it connects to the peer.</summary>
     public TaskCompletionSource? EnqueueGate { get; set; }
+
+    /// <summary>
+    /// When set, slskd has already created the batch with this many transfers (0 or 1) before the enqueue
+    /// waits at <see cref="EnqueueGate"/> or fails: what slskd leaves behind when the call breaks off.
+    /// </summary>
+    public int? BatchBeforeFailure { get; set; }
 
     public Guid TransferIdFor(Guid batchId) => Batches[batchId].Transfers[0].Id;
 
@@ -153,9 +160,14 @@ public sealed class FakeDownloadSlskd : ISlskdClient
         Guid batchId, string username, string remotePath, long size, string destination, CancellationToken ct)
     {
         Enqueues.Add(new EnqueueCall(batchId, username, remotePath, size, destination));
+        if (BatchBeforeFailure is { } transfers)
+        {
+            Batches[batchId] = transfers == 0 ? new SlskdBatch(batchId, "peer", []) : Batch(batchId, Guid.NewGuid(), "Queued, Remotely", 0);
+        }
+
         if (EnqueueGate is { } gate)
         {
-            await gate.Task;
+            await gate.Task.WaitAsync(ct);
         }
 
         if (EnqueueThrows)
@@ -168,8 +180,12 @@ public sealed class FakeDownloadSlskd : ISlskdClient
             return new SlskdEnqueueResult(false, null, error);
         }
 
-        var batch = Batch(batchId, Guid.NewGuid(), "Queued, Remotely", 0);
-        Batches[batchId] = batch;
+        if (!Batches.TryGetValue(batchId, out var batch) || batch.Transfers.Count == 0)
+        {
+            batch = Batch(batchId, Guid.NewGuid(), "Queued, Remotely", 0);
+            Batches[batchId] = batch;
+        }
+
         return new SlskdEnqueueResult(true, batch, null);
     }
 
