@@ -19,6 +19,13 @@ public sealed class DownloadMonitor(
     ILogger<DownloadMonitor> logger)
     : BackgroundService
 {
+    /// <summary>
+    /// How long a job may have no slskd transfer before a missing or empty batch counts against it. slskd creates
+    /// the batch, connects to the peer and only then inserts the transfer, so an add or retry still in flight looks
+    /// like a vanished transfer. Longer than the manager's enqueue timeout plus its follow-up probe.
+    /// </summary>
+    internal static readonly TimeSpan AddGrace = TimeSpan.FromMinutes(3);
+
     private readonly SlskarrOptions _options = options.Value;
 
     // When slskd first became unreachable for a job; the outage is not held against its stall clock.
@@ -113,7 +120,10 @@ public sealed class DownloadMonitor(
         var transfer = batch?.Transfers.FirstOrDefault(t => t.Filename == job.RemotePath) ?? batch?.Transfers.FirstOrDefault();
         if (transfer is null)
         {
-            await ResolveMissingAsync(job, now, ct);
+            if (!InAddGrace(job, now))
+            {
+                await ResolveMissingAsync(job, now, ct);
+            }
         }
         else
         {
@@ -175,6 +185,14 @@ public sealed class DownloadMonitor(
             await db.SaveChangesAsync(ct);
         }
     }
+
+    /// <summary>
+    /// An add or retry may still be enqueueing: no transfer id yet, and the latest (re)enqueue is recent.
+    /// <see cref="DownloadJobEntity.LastProgressAt"/> is that time, as both add and retry set it and nothing else
+    /// moves it forward before the job has a transfer.
+    /// </summary>
+    private static bool InAddGrace(DownloadJobEntity job, DateTimeOffset now) =>
+        job.SlskdTransferId is null && now - job.LastProgressAt < AddGrace;
 
     /// <summary>slskd no longer knows the transfer: it only counts as done if the full file is on disk.</summary>
     private async Task ResolveMissingAsync(DownloadJobEntity job, DateTimeOffset now, CancellationToken ct)

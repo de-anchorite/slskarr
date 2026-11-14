@@ -1,7 +1,9 @@
 using Shouldly;
 using Slskarr.Configuration;
 using Slskarr.Data;
+using Slskarr.Downloads;
 using Slskarr.Soulseek;
+using Slskarr.Tests.Search;
 
 namespace Slskarr.Tests.Downloads;
 
@@ -225,5 +227,67 @@ public sealed class DownloadMonitorTests : IDisposable
         await _h.Poll();
 
         _h.Job(job.Id).State.ShouldBe(DownloadState.Completed);
+    }
+
+    [Fact]
+    public async Task Poll_during_in_flight_enqueue_does_not_fail_the_job()
+    {
+        var gate = _h.Slskd.EnqueueGate = new TaskCompletionSource();
+        var add = _h.Manager.AddAsync(DownloadHarness.HitId, "ebooks", CancellationToken.None);
+        await SearchHarness.Until(() => _h.Slskd.Enqueues.Count == 1, "the enqueue is in flight");
+        var id = _h.Slskd.Enqueues[0].BatchId;
+
+        _h.Time.Advance(TimeSpan.FromSeconds(30));
+        await _h.Poll();
+
+        var during = _h.Job(id);
+        during.State.ShouldBe(DownloadState.Queued);
+        during.FailMessage.ShouldBeNull();
+
+        gate.SetResult();
+        (await add.Within()).Ok.ShouldBeTrue();
+        _h.Slskd.SetTransfer(id, "InProgress", 100);
+        await _h.Poll();
+
+        var after = _h.Job(id);
+        after.State.ShouldBe(DownloadState.Downloading);
+        after.SlskdTransferId.ShouldBe(_h.Slskd.TransferIdFor(id));
+    }
+
+    [Fact]
+    public async Task Job_without_transfer_fails_only_after_add_grace()
+    {
+        var job = await _h.AddJob();
+        _h.UpdateJob(job.Id, j => j.SlskdTransferId = null);
+        _h.Slskd.Batches.Clear();
+
+        _h.Time.Advance(DownloadMonitor.AddGrace - TimeSpan.FromSeconds(1));
+        await _h.Poll();
+        _h.Job(job.Id).State.ShouldBe(DownloadState.Queued);
+
+        _h.Time.Advance(TimeSpan.FromSeconds(2));
+        await _h.Poll();
+        var after = _h.Job(job.Id);
+        after.State.ShouldBe(DownloadState.Failed);
+        after.FailMessage.ShouldBe("Transfer disappeared from slskd");
+    }
+
+    [Fact]
+    public async Task Add_grace_counts_from_the_latest_enqueue_not_creation()
+    {
+        var job = await _h.AddJob();
+        _h.Time.Advance(TimeSpan.FromHours(3));
+        var retriedAt = _h.Time.GetUtcNow();
+        _h.UpdateJob(job.Id, j =>
+        {
+            j.SlskdTransferId = null; // a retry whose enqueue left an empty batch
+            j.LastProgressAt = retriedAt;
+        });
+        _h.Slskd.Batches[job.BatchId] = new SlskdBatch(job.BatchId, "peer", []);
+
+        _h.Time.Advance(TimeSpan.FromMinutes(1));
+        await _h.Poll();
+
+        _h.Job(job.Id).State.ShouldBe(DownloadState.Queued);
     }
 }

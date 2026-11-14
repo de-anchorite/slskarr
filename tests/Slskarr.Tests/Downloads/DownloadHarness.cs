@@ -83,6 +83,14 @@ public sealed class DownloadHarness : IDisposable
         return db.DownloadJobs.AsNoTracking().Single(j => j.Id == id);
     }
 
+    /// <summary>Changes a stored job directly, e.g. to set up a state the manager would only reach in a race.</summary>
+    public void UpdateJob(Guid id, Action<DownloadJobEntity> change)
+    {
+        using var db = Db.CreateDbContext();
+        change(db.DownloadJobs.Single(j => j.Id == id));
+        db.SaveChanges();
+    }
+
     public Task Poll() => Monitor.PollOnceAsync(CancellationToken.None);
 
     public void Dispose()
