@@ -5,6 +5,7 @@ using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.DependencyInjection;
 using Shouldly;
 using Slskarr.Data;
+using Slskarr.Newznab;
 using Slskarr.Nzb;
 using Slskarr.Profiles;
 using Slskarr.Search;
@@ -51,6 +52,9 @@ public sealed class NewznabContractTests : IDisposable
             ReleaseTitle = title, ParsedAuthor = author, ParsedTitle = book, Format = "EPUB", Rank = rank,
             SeenAt = new DateTimeOffset(2026, 1, 1, 0, 0, 0, TimeSpan.Zero) - TimeSpan.FromMinutes(ageMinutes),
         };
+
+    private static string?[] Values(XElement i, string name) =>
+        [.. i.Elements(Nn + "attr").Where(a => a.Attribute("name")!.Value == name).Select(a => a.Attribute("value")!.Value)];
 
     private static async Task<XDocument> Xml(HttpResponseMessage r) => XDocument.Parse(await r.Content.ReadAsStringAsync());
 
@@ -123,7 +127,6 @@ public sealed class NewznabContractTests : IDisposable
 
         var items = doc.Descendants("item").ToList();
         items.Count.ShouldBe(2);
-        string?[] Values(XElement i, string name) => [.. i.Elements(Nn + "attr").Where(a => a.Attribute("name")!.Value == name).Select(a => a.Attribute("value")!.Value)];
         Values(items[0], "author").ShouldBe(["Frank Herbert"]);
         Values(items[0], "booktitle").ShouldBe(["Dune"]);
         Values(items[1], "author").ShouldBeEmpty();
@@ -145,6 +148,69 @@ public sealed class NewznabContractTests : IDisposable
 
         var paged = await Xml(await client.GetAsync("/newznab/api?t=book&cat=7000,7020&offset=1&limit=1"));
         paged.Descendants("item").Select(i => i.Element("title")!.Value).ShouldBe(["Middle"]);
+    }
+
+    // Chaptarr/Readarr's connection test fetches the RSS ("recent") feed and Prowlarr's sends t=search with no
+    // query; both fail with "Query successful, but no results ..." when the feed has no items.
+    [Theory]
+    [InlineData("/newznab/api?t=book&cat=7000,7020&extended=1&offset=0&limit=100")]
+    [InlineData("/newznab/api?t=search&extended=1&cat=7000,7020")]
+    [InlineData("/newznab/api?t=search")]
+    public async Task Empty_rss_returns_one_placeholder_so_connection_tests_pass(string url)
+    {
+        using var client = _factory.CreateClient();
+
+        var r = await client.GetAsync(url);
+
+        r.StatusCode.ShouldBe(HttpStatusCode.OK);
+        var item = (await Xml(r)).Descendants("item").ShouldHaveSingleItem();
+        item.Element("guid")!.Value.ShouldBe(NewznabPlaceholder.Id);
+        item.Element("title")!.Value.ShouldNotContain(" - "); // must not parse as "Author - Title"
+        DateTimeOffset.TryParse(item.Element("pubDate")!.Value, CultureInfo.InvariantCulture, DateTimeStyles.None, out _).ShouldBeTrue();
+        long.Parse(item.Element("size")!.Value, CultureInfo.InvariantCulture).ShouldBeGreaterThan(0);
+        item.Element("enclosure")!.Attribute("type")!.Value.ShouldBe("application/x-nzb");
+        Values(item, "category").ShouldContain("7020");
+        Values(item, "author").ShouldBeEmpty();
+        Values(item, "booktitle").ShouldBeEmpty();
+    }
+
+    [Fact]
+    public async Task Placeholder_is_not_shown_when_real_hits_exist()
+    {
+        await Seed(null, Hit("AAAAAAAAAAAAAAAAAAAAAA", "Frank Herbert - Dune [EPUB]"));
+        using var client = _factory.CreateClient();
+
+        var items = (await Xml(await client.GetAsync("/newznab/api?t=book&cat=7000,7020&offset=0&limit=100"))).Descendants("item").ToList();
+
+        items.ShouldHaveSingleItem().Element("guid")!.Value.ShouldBe("AAAAAAAAAAAAAAAAAAAAAA");
+    }
+
+    [Fact]
+    public async Task Placeholder_is_not_shown_for_searches_later_pages_or_other_categories()
+    {
+        await Seed(DuneRequest); // cached search with no hits
+        using var client = _factory.CreateClient();
+
+        foreach (var url in new[]
+                 {
+                     "/newznab/api?t=book&author=Wrong&title=Wrong&cat=7020",
+                     "/newznab/api?t=book&cat=7000,7020&offset=100&limit=100",
+                     "/newznab/api?t=search&cat=2000",
+                 })
+        {
+            (await Xml(await client.GetAsync(url))).Descendants("item").ShouldBeEmpty(url);
+        }
+    }
+
+    [Fact]
+    public async Task Get_placeholder_returns_error_300()
+    {
+        using var client = _factory.CreateClient();
+
+        var e = (await Xml(await client.GetAsync($"/newznab/api?t=get&id={NewznabPlaceholder.Id}"))).Root!;
+
+        e.Name.LocalName.ShouldBe("error");
+        e.Attribute("code")!.Value.ShouldBe("300");
     }
 
     [Fact]
