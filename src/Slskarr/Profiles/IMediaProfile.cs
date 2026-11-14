@@ -23,6 +23,9 @@ public interface IMediaProfile
 
     string SabCategory { get; }
 
+    /// <summary>Ranking criteria, in priority order, handed to <see cref="Ranker"/>.</summary>
+    IReadOnlyList<string> Ranking { get; }
+
     bool Handles(SearchRequest r);
 
     string BuildQuery(SearchRequest r);

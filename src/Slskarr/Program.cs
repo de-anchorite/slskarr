@@ -4,6 +4,7 @@ using Slskarr.Configuration;
 using Slskarr.Data;
 using Slskarr.Profiles;
 using Slskarr.Profiles.Ebook;
+using Slskarr.Search;
 using Slskarr.Soulseek;
 
 var builder = WebApplication.CreateBuilder(args);
@@ -16,6 +17,10 @@ builder.Services.AddSingleton<IMediaProfile, EbookProfile>();
 builder.Services.AddSingleton<ProfileRegistry>();
 builder.Services.AddHttpClient<ISlskdClient, SlskdClient>("slskd", (sp, client) =>
     SlskdClient.Configure(client, sp.GetRequiredService<IOptions<SlskarrOptions>>().Value.Slskd));
+builder.Services.AddSingleton<Ranker>();
+builder.Services.AddSingleton<SearchThrottle>();
+builder.Services.AddSingleton<SearchCoordinator>();
+builder.Services.AddHostedService<SearchWorker>();
 
 var app = builder.Build();
 

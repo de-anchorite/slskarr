@@ -16,6 +16,8 @@ public sealed partial class EbookProfile(IOptions<SlskarrOptions> options, Ebook
 
     public string SabCategory => _options.SabCategory;
 
+    public IReadOnlyList<string> Ranking => _options.Ranking;
+
     [GeneratedRegex(@"[:;,!?""'()\[\]]", RegexOptions.CultureInvariant)]
     private static partial Regex PunctuationRegex();
 

@@ -113,4 +113,8 @@ public class EbookProfileTests
         registry.ByName("ebook").ShouldBe(profile);
         registry.ByName("nope").ShouldBeNull();
     }
+
+    [Fact]
+    public void Ranking_comes_from_options() =>
+        Create().Ranking.ShouldBe(EbookProfileOptions.AllowedRankingCriteria);
 }
