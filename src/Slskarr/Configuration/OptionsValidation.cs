@@ -17,6 +17,10 @@ public static class OptionsValidation
     private static void ApplyDefaults(SlskarrOptions options)
     {
         var ebook = options.Ebook;
+
+        // Compared with extensions parsed from Soulseek file names: lower case, no dot.
+        ebook.Extensions = NormaliseExtensions(ebook.Extensions);
+        ebook.FormatPreference = NormaliseExtensions(ebook.FormatPreference);
         if (ebook.Extensions.Length == 0)
         {
             ebook.Extensions = [.. EbookProfileOptions.DefaultExtensions];
@@ -30,6 +34,13 @@ public static class OptionsValidation
             ebook.Ranking = [.. EbookProfileOptions.AllowedRankingCriteria];
         }
     }
+
+    private static string[] NormaliseExtensions(string[] extensions) =>
+    [
+        .. extensions
+            .Select(e => e.Trim().TrimStart('.').ToLowerInvariant())
+            .Where(e => e.Length > 0),
+    ];
 }
 
 public sealed class SlskarrOptionsValidator : IValidateOptions<SlskarrOptions>
@@ -47,6 +58,11 @@ public sealed class SlskarrOptionsValidator : IValidateOptions<SlskarrOptions>
         if (string.IsNullOrWhiteSpace(options.Slskd.ApiKey))
         {
             failures.Add("Slskarr:Slskd:ApiKey is required.");
+        }
+
+        if (options.Search.SlskdSearchTimeoutSeconds < SearchOptions.MinSlskdSearchTimeoutSeconds)
+        {
+            failures.Add($"Slskarr:Search:SlskdSearchTimeoutSeconds must be at least {SearchOptions.MinSlskdSearchTimeoutSeconds}.");
         }
 
         var unknown = options.Ebook.Ranking

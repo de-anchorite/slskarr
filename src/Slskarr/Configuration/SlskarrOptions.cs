@@ -43,6 +43,8 @@ public sealed class PathOptions
 
 public sealed class SearchOptions
 {
+    public const int MinSlskdSearchTimeoutSeconds = 5;
+
     public TimeSpan SyncWait { get; set; } = TimeSpan.FromSeconds(60);
 
     public int Concurrency { get; set; } = 1;

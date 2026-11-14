@@ -76,6 +76,37 @@ public class OptionsTests
     }
 
     [Fact]
+    public void Options_normalise_configured_extensions_and_format_preference()
+    {
+        var o = Resolve(Valid(
+            ("Slskarr:Ebook:Extensions:0", " .EPUB "),
+            ("Slskarr:Ebook:Extensions:1", "pdf"),
+            ("Slskarr:Ebook:FormatPreference:0", ".Mobi"),
+            ("Slskarr:Ebook:FormatPreference:1", "epub ")));
+
+        o.Ebook.Extensions.ShouldBe(["epub", "pdf"]);
+        o.Ebook.FormatPreference.ShouldBe(["mobi", "epub"]);
+    }
+
+    [Theory]
+    [InlineData("4", true)]
+    [InlineData("0", true)]
+    [InlineData("5", false)]
+    public void Options_reject_slskd_search_timeout_below_5_seconds(string seconds, bool rejected)
+    {
+        var values = Valid(("Slskarr:Search:SlskdSearchTimeoutSeconds", seconds));
+
+        if (rejected)
+        {
+            Should.Throw<OptionsValidationException>(() => Resolve(values)).Message.ShouldContain("SlskdSearchTimeoutSeconds");
+        }
+        else
+        {
+            Resolve(values).Search.SlskdSearchTimeoutSeconds.ShouldBe(5);
+        }
+    }
+
+    [Fact]
     public void Options_reject_missing_slskd_url_or_key()
     {
         var ex = Should.Throw<OptionsValidationException>(() => Resolve(new Dictionary<string, string?>()));
