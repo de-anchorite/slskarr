@@ -28,8 +28,10 @@ services:
       Slskarr__Slskd__ApiKey: change-me-slskd-key
       Slskarr__Slskd__DownloadsPath: /downloads
       Slskarr__ApiKey: change-me-slskarr-key
+    # Bind-mounting a host folder at /data instead? Run as its owner (no PUID/PGID in this image):
+    # user: "1000:1000"
     volumes:
-      - slskarr-data:/data   # a bind mount here must be writable by UID 1654 (the image's app user)
+      - slskarr-data:/data   # or e.g. /srv/slskarr:/data (must be writable by the container's user)
     ports:
       - "8080:8080"
 
