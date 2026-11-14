@@ -25,19 +25,22 @@ public sealed partial class EbookNameParser
     [GeneratedRegex(@"\s*[\[(]([^\[\]()]*)[\])]\s*$", RegexOptions.CultureInvariant)]
     private static partial Regex TrailingGroupRegex();
 
-    [GeneratedRegex(@"[\s\-]*\bISBN[\s:_\-]*([\dXx\-]+)\s*$", RegexOptions.CultureInvariant | RegexOptions.IgnoreCase)]
+    [GeneratedRegex(@"[\s\-]*\bISBN(?:-1[03])?[\s:_\-]*([0-9Xx\-]+)\s*$", RegexOptions.CultureInvariant | RegexOptions.IgnoreCase)]
     private static partial Regex BareIsbnRegex();
 
-    [GeneratedRegex(@"^(?:97[89][\s\-]?)?[\d\-\s]{9,14}[\dXx]?$", RegexOptions.CultureInvariant)]
-    private static partial Regex IsbnLikeRegex();
+    [GeneratedRegex(@"\s+-?\s*([0-9][0-9\-]{8,15}[0-9Xx])\s*$", RegexOptions.CultureInvariant)]
+    private static partial Regex TrailingNumberRegex();
 
-    [GeneratedRegex(@"^(?:1[5-9]|20)\d\d$", RegexOptions.CultureInvariant)]
+    [GeneratedRegex(@"^ISBN(?:-1[03])?[:\-]*([0-9Xx\-]*)$", RegexOptions.CultureInvariant | RegexOptions.IgnoreCase)]
+    private static partial Regex IsbnTokenRegex();
+
+    [GeneratedRegex(@"^(?:1[5-9]|20)[0-9]{2}$", RegexOptions.CultureInvariant)]
     private static partial Regex YearRegex();
 
     [GeneratedRegex(@"\s+-\s+((?:1[5-9]|20)\d\d)$", RegexOptions.CultureInvariant)]
     private static partial Regex DashYearRegex();
 
-    [GeneratedRegex(@"^v\d+(?:\.\d+)*$", RegexOptions.CultureInvariant | RegexOptions.IgnoreCase)]
+    [GeneratedRegex(@"^v[0-9]+(?:\.[0-9]+)*$", RegexOptions.CultureInvariant | RegexOptions.IgnoreCase)]
     private static partial Regex VersionRegex();
 
     [GeneratedRegex(@"(?<=\w)\.(?=\w)", RegexOptions.CultureInvariant)]
@@ -46,13 +49,13 @@ public sealed partial class EbookNameParser
     [GeneratedRegex(@"\s+", RegexOptions.CultureInvariant)]
     private static partial Regex WhitespaceRegex();
 
-    [GeneratedRegex(@"^(\d{1,3})\s*(?:-|\.)\s+(.+)$", RegexOptions.CultureInvariant)]
+    [GeneratedRegex(@"^([0-9]{1,3})\s*(?:-|\.)\s+(.+)$", RegexOptions.CultureInvariant)]
     private static partial Regex SeriesIndexRegex();
 
     [GeneratedRegex(@"^@@\w+$", RegexOptions.CultureInvariant)]
     private static partial Regex ShareRootRegex();
 
-    [GeneratedRegex(@"\s*\(\d+\)$", RegexOptions.CultureInvariant)]
+    [GeneratedRegex(@"\s*\([0-9]+\)$", RegexOptions.CultureInvariant)]
     private static partial Regex CalibreIdRegex();
 
     [GeneratedRegex(@"\s+by\s+", RegexOptions.CultureInvariant | RegexOptions.IgnoreCase | RegexOptions.RightToLeft)]
@@ -170,13 +173,21 @@ public sealed partial class EbookNameParser
                 continue;
             }
 
+            var number = TrailingNumberRegex().Match(text);
+            if (number.Success && number.Index > 0 && IsIsbn(number.Groups[1].Value, requireChecksum: true))
+            {
+                text = text[..number.Index].TrimEnd();
+                changed = true;
+                continue;
+            }
+
             var group = TrailingGroupRegex().Match(text);
             if (group.Success && group.Index > 0)
             {
                 var content = group.Groups[1].Value.Trim();
                 if (YearRegex().IsMatch(content))
                 {
-                    year ??= int.Parse(content);
+                    year ??= ParseYear(content);
                     text = text[..group.Index].TrimEnd();
                     changed = true;
                 }
@@ -192,7 +203,7 @@ public sealed partial class EbookNameParser
         var dashYear = DashYearRegex().Match(text);
         if (dashYear.Success && text[..dashYear.Index].Contains(" - ", StringComparison.Ordinal))
         {
-            year ??= int.Parse(dashYear.Groups[1].Value);
+            year ??= ParseYear(dashYear.Groups[1].Value);
             text = text[..dashYear.Index].TrimEnd();
         }
 
@@ -213,9 +224,10 @@ public sealed partial class EbookNameParser
             var token = tokens[i];
             if (FormatWords.Contains(token) || VersionRegex().IsMatch(token))
                 continue;
-            if (token.StartsWith("ISBN", StringComparison.OrdinalIgnoreCase))
+            var label = IsbnTokenRegex().Match(token);
+            if (label.Success)
             {
-                var rest = token.TrimStart("ISBNisbn".ToCharArray()).TrimStart(':', '-');
+                var rest = label.Groups[1].Value;
                 if (rest.Length == 0 && i + 1 < tokens.Length)
                     continue; // "ISBN 0441013597": the number is the next token
                 if (IsIsbn(rest))
@@ -230,18 +242,36 @@ public sealed partial class EbookNameParser
         return true;
     }
 
-    private static bool IsIsbn(string value)
+    private static int? ParseYear(string value) =>
+        int.TryParse(value, System.Globalization.NumberStyles.None, System.Globalization.CultureInfo.InvariantCulture, out var y) ? y : null;
+
+    private static bool IsIsbn(string value, bool requireChecksum = false)
     {
         var compact = value.Replace("-", "").Replace(" ", "");
-        if (compact.Length is not (10 or 13) || !IsbnLikeRegex().IsMatch(value))
+        if (compact.Length is not (10 or 13))
             return false;
         for (var i = 0; i < compact.Length; i++)
         {
             var c = compact[i];
-            if (!char.IsAsciiDigit(c) && !(i == compact.Length - 1 && c is 'X' or 'x'))
+            if (!char.IsAsciiDigit(c) && !(i == 9 && compact.Length == 10 && c is 'X' or 'x'))
                 return false;
         }
 
-        return true;
+        return !requireChecksum || HasValidChecksum(compact);
+    }
+
+    private static bool HasValidChecksum(string isbn)
+    {
+        var sum = 0;
+        if (isbn.Length == 13)
+        {
+            for (var i = 0; i < 13; i++)
+                sum += (isbn[i] - '0') * (i % 2 == 0 ? 1 : 3);
+            return sum % 10 == 0;
+        }
+
+        for (var i = 0; i < 10; i++)
+            sum += (isbn[i] is 'X' or 'x' ? 10 : isbn[i] - '0') * (10 - i);
+        return sum % 11 == 0;
     }
 }
