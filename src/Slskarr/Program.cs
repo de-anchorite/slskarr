@@ -10,6 +10,7 @@ using Slskarr.Profiles.Ebook;
 using Slskarr.Sabnzbd;
 using Slskarr.Search;
 using Slskarr.Soulseek;
+using Slskarr.Web;
 
 var builder = WebApplication.CreateBuilder(args);
 
@@ -50,6 +51,7 @@ app.MapGet("/health", () => Results.Json(new { status = "ok" }));
 
 app.MapNewznab();
 app.MapSabnzbd();
+app.MapPages();
 
 app.Run();
 
