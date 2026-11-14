@@ -33,21 +33,21 @@ public static class Pages
         FileManagementStatus fileStatus,
         ISlskdClient slskd,
         IDbContextFactory<SlskarrDb> dbFactory,
+        TimeProvider time,
         CancellationToken ct)
     {
         var q = coordinator.Status();
-        var version = await VersionAsync(slskd, ct);
+        var version = await VersionAsync(slskd, time, ct);
 
         await using var db = await dbFactory.CreateDbContextAsync(ct);
-        var searches = (await db.SearchJobs.AsNoTracking().ToListAsync(ct))
+        var searches = await db.SearchJobs.AsNoTracking()
             .OrderByDescending(j => j.LastRequestedAt)
             .Take(20)
-            .ToList();
-        var jobs = (await db.DownloadJobs.AsNoTracking()
-                .Where(j => j.State == DownloadState.Queued || j.State == DownloadState.Downloading)
-                .ToListAsync(ct))
+            .ToListAsync(ct);
+        var jobs = await db.DownloadJobs.AsNoTracking()
+            .Where(j => j.State == DownloadState.Queued || j.State == DownloadState.Downloading)
             .OrderBy(j => j.CreatedAt)
-            .ToList();
+            .ToListAsync(ct);
 
         var h = new Html();
         if (fileStatus.RemoteDeleteForbidden)
@@ -78,10 +78,10 @@ public static class Pages
         return Page("Slskarr", h);
     }
 
-    private static async Task<string> VersionAsync(ISlskdClient slskd, CancellationToken ct)
+    private static async Task<string> VersionAsync(ISlskdClient slskd, TimeProvider time, CancellationToken ct)
     {
-        using var cts = CancellationTokenSource.CreateLinkedTokenSource(ct);
-        cts.CancelAfter(VersionTimeout);
+        using var timeout = new CancellationTokenSource(VersionTimeout, time);
+        using var cts = CancellationTokenSource.CreateLinkedTokenSource(ct, timeout.Token);
         try
         {
             return await slskd.GetVersionAsync(cts.Token);

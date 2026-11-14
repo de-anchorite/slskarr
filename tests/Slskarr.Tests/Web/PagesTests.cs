@@ -128,6 +128,35 @@ public sealed class PagesTests : IDisposable
         (await res.Content.ReadAsStringAsync()).ShouldContain("unreachable");
     }
 
+    private sealed class HangingHandler : HttpMessageHandler
+    {
+        protected override async Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken ct)
+        {
+            await Task.Delay(Timeout.Infinite, ct);
+            return new HttpResponseMessage();
+        }
+    }
+
+    [Fact]
+    public async Task Status_page_version_timeout_runs_on_the_injected_clock()
+    {
+        var f = new SlskarrFactory().WithSlskdHandler(() => new HangingHandler());
+        var c = f.CreateClient();
+        _disposables.Add(c);
+        _disposables.Add(f);
+
+        var page = c.GetStringAsync("/");
+        var deadline = DateTime.UtcNow + TimeSpan.FromSeconds(2); // the real-time fallback would need 3s
+        while (!page.IsCompleted && DateTime.UtcNow < deadline)
+        {
+            f.Time.Advance(TimeSpan.FromSeconds(1));
+            await Task.Delay(20);
+        }
+
+        page.IsCompleted.ShouldBeTrue();
+        (await page).ShouldContain("unreachable");
+    }
+
     [Fact]
     public async Task Status_page_shows_slskd_version_when_up()
     {
