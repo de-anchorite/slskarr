@@ -82,8 +82,8 @@ public sealed class SearchCoordinatorTests : IDisposable
 
         (await _h.Worker.RunOnceAsync(CancellationToken.None)).ShouldBeTrue();
 
-        (await first).Count.ShouldBe(2);
-        (await second).Select(h => h.Id).ShouldBe((await first).Select(h => h.Id));
+        (await first.Within()).Count.ShouldBe(2);
+        (await second.Within()).Select(h => h.Id).ShouldBe((await first.Within()).Select(h => h.Id));
         _h.Slskd.StartedTexts.Count.ShouldBe(1);
         _h.Jobs().Count.ShouldBe(1);
     }
@@ -102,12 +102,12 @@ public sealed class SearchCoordinatorTests : IDisposable
         // Never reach 90s here, so the slskd search cannot have completed when SearchAsync returns.
         await h.AdvanceUntil(() => search.IsCompleted, stopAt: TimeSpan.FromSeconds(89));
 
-        (await search).ShouldBeEmpty();
+        (await search.Within()).ShouldBeEmpty();
         (h.Time.GetUtcNow() - SearchHarness.Start).ShouldBeGreaterThanOrEqualTo(TimeSpan.FromSeconds(60));
 
         await h.AdvanceUntil(() => run.IsCompleted, stopAt: TimeSpan.FromSeconds(120));
 
-        (await run).ShouldBeTrue();
+        (await run.Within()).ShouldBeTrue();
         var recent = await h.Coordinator.RecentAsync(h.Ebook, 0, 100, CancellationToken.None);
         recent.Count.ShouldBe(2);
         h.Jobs().Single().State.ShouldBe(SearchJobState.Done);
@@ -140,7 +140,7 @@ public sealed class SearchCoordinatorTests : IDisposable
 
         // a was re-requested last, so it jumped ahead of c and b.
         _h.Slskd.StartedTexts.ShouldBe(["Dune", "Ulysses", "Emma"]);
-        await Task.WhenAll(pending);
+        await Task.WhenAll(pending).Within();
     }
 
     [Fact]
@@ -149,9 +149,11 @@ public sealed class SearchCoordinatorTests : IDisposable
         var search = _h.Coordinator.SearchAsync(AuthorTitle, CancellationToken.None);
         await _h.UntilQueued(Key(AuthorTitle));
 
+        // Expire before awaiting: the waiter's 60s timer may register after the advance, so the expiry
+        // notification (not the timer) is what must release it.
         _h.Time.Advance(TimeSpan.FromHours(25));
-        (await search).ShouldBeEmpty();
         (await _h.Worker.RunOnceAsync(CancellationToken.None)).ShouldBeFalse();
+        (await search.Within()).ShouldBeEmpty();
 
         _h.Slskd.StartedTexts.ShouldBeEmpty();
         var job = _h.Jobs().Single();
@@ -293,7 +295,7 @@ public sealed class SearchCoordinatorTests : IDisposable
             await _h.UntilQueued("ebook:emma");
             await _h.AdvanceUntil(() => next.IsCompleted, stopAt: TimeSpan.FromSeconds(20));
 
-            (await next).Count.ShouldBe(2);
+            (await next.Within()).Count.ShouldBe(2);
             _h.Slskd.StartedTexts.ShouldBe(["Frank Herbert Dune", "Emma"]);
         }
         finally

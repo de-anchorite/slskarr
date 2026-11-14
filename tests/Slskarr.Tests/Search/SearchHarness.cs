@@ -149,7 +149,7 @@ public sealed class SearchHarness : IDisposable
             (await Worker.RunOnceAsync(CancellationToken.None)).ShouldBeTrue();
         }
 
-        return await search;
+        return await search.Within();
     }
 
     public void Dispose()
@@ -160,6 +160,16 @@ public sealed class SearchHarness : IDisposable
             Directory.Delete(_dir, recursive: true);
         }
     }
+}
+
+/// <summary>Real-time guard so a hung wait fails fast instead of stalling the run.</summary>
+public static class TaskGuard
+{
+    private static readonly TimeSpan Limit = TimeSpan.FromSeconds(10);
+
+    public static Task<T> Within<T>(this Task<T> task) => task.WaitAsync(Limit);
+
+    public static Task Within(this Task task) => task.WaitAsync(Limit);
 }
 
 /// <summary>In-memory slskd search API. Searches complete <see cref="CompleteAfter"/> after they start (fake time).</summary>
