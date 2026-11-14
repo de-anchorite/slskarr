@@ -40,10 +40,15 @@ public sealed class SlskdClient(HttpClient http, TimeProvider time) : ISlskdClie
         return id;
     }
 
-    public async Task<SlskdSearch> GetSearchAsync(Guid id, bool includeResponses, CancellationToken ct)
+    public async Task<SlskdSearch?> GetSearchAsync(Guid id, bool includeResponses, CancellationToken ct)
     {
         var path = $"searches/{id}?includeResponses={(includeResponses ? "true" : "false")}";
         using var response = await SendAsync(() => Req(HttpMethod.Get, path), ct);
+        if (response.StatusCode == HttpStatusCode.NotFound)
+        {
+            return null;
+        }
+
         await EnsureSuccessAsync(response, ct);
         return await ReadAsync<SlskdSearch>(response, ct);
     }

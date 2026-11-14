@@ -119,12 +119,21 @@ public sealed class SlskdClientTests : IDisposable
 
         var search = await Client().GetSearchAsync(id, true, default);
 
+        search.ShouldNotBeNull();
         search.IsComplete.ShouldBeTrue();
         search.State.ShouldBe("Completed, TimedOut");
         search.Responses.ShouldNotBeNull().Single().Files.Single().Filename.ShouldBe(@"@@a\b.epub");
         var entry = Only();
         ShouldCarryKey(entry);
         entry.RequestMessage!.Query!["includeResponses"].ShouldBe(["true"]);
+    }
+
+    [Fact]
+    public async Task GetSearch_maps_404_to_null()
+    {
+        var id = Guid.NewGuid();
+        Stub("GET", $"/api/v0/searches/{id}", 404);
+        (await Client().GetSearchAsync(id, false, default)).ShouldBeNull();
     }
 
     [Fact]
