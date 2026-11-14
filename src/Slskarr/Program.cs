@@ -41,6 +41,13 @@ var app = builder.Build();
 
 app.Logger.LogInformation("Slskarr {Version} starting", AppVersion.Current);
 
+var dataProblem = DataDirectory.FindProblem(app.Services.GetRequiredService<IOptions<SlskarrOptions>>().Value.DataPath);
+if (dataProblem is not null)
+{
+    app.Logger.LogCritical("{Problem}", dataProblem);
+    return 1;
+}
+
 app.Services.MigrateSlskarrDb();
 
 if (string.IsNullOrWhiteSpace(app.Services.GetRequiredService<IOptions<SlskarrOptions>>().Value.ApiKey))
@@ -57,5 +64,6 @@ app.MapSabnzbd();
 app.MapPages();
 
 app.Run();
+return 0;
 
 public partial class Program;

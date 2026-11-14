@@ -28,7 +28,8 @@ internal static class NewznabXml
         new XDeclaration("1.0", "utf-8", null),
         new XElement("error", new XAttribute("code", code), new XAttribute("description", description))));
 
-    public static byte[] Feed(IEnumerable<HitEntity> hits, string baseUrl, string? apiKey, int offset)
+    /// <param name="placeholderAt">When set, the feed holds only <see cref="NewznabPlaceholder"/>, dated this time.</param>
+    public static byte[] Feed(IEnumerable<HitEntity> hits, string baseUrl, string? apiKey, int offset, DateTimeOffset? placeholderAt = null)
     {
         var channel = new XElement("channel",
             new XElement("title", "Slskarr"),
@@ -38,6 +39,15 @@ internal static class NewznabXml
         foreach (var hit in hits)
         {
             channel.Add(Item(hit, baseUrl, apiKey));
+        }
+
+        if (placeholderAt is { } at)
+        {
+            channel.Add(Item(new HitEntity
+            {
+                Id = NewznabPlaceholder.Id, SearchKey = "", Profile = "", Username = "", RemotePath = "",
+                ReleaseTitle = NewznabPlaceholder.Title, Size = NewznabPlaceholder.Size, Format = "", SeenAt = at,
+            }, baseUrl, apiKey));
         }
 
         return StubNzb.Serialize(new XDocument(new XDeclaration("1.0", "utf-8", null),

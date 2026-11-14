@@ -27,6 +27,7 @@ public static class NewznabEndpoints
         ProfileRegistry registry,
         SearchCoordinator coordinator,
         IDbContextFactory<SlskarrDb> dbFactory,
+        TimeProvider time,
         CancellationToken ct)
     {
         var apiKey = options.Value.ApiKey;
@@ -48,7 +49,11 @@ public static class NewznabEndpoints
                 var offset = ParseInt(q["offset"], 0, 0, int.MaxValue);
                 var limit = ParseInt(q["limit"], MaxLimit, 1, MaxLimit);
                 var hits = await FindAsync(search, offset, limit, registry, coordinator, ct);
-                return Results.Bytes(NewznabXml.Feed(hits, BaseUrl(req), apiKey, offset), Rss);
+                // An empty first RSS page gets one placeholder so *arr/Prowlarr connection tests pass.
+                var placeholder = search.IsRss && offset == 0 && hits.Count == 0 && registry.ForRequest(search) is not null
+                    ? time.GetUtcNow()
+                    : (DateTimeOffset?)null;
+                return Results.Bytes(NewznabXml.Feed(hits, BaseUrl(req), apiKey, offset, placeholder), Rss);
 
             case "get":
                 var id = q["id"].ToString();

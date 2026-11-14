@@ -112,7 +112,7 @@ public sealed class EbookFlowTests : IDisposable
     {
         var chaptarr = await StartWithSlowSearch();
 
-        await AdvanceUntil(async () => (await chaptarr.RssAsync()).Count > 0, "late hits reach the RSS feed");
+        await AdvanceUntil(async () => (await chaptarr.RssAsync()).Any(i => i.Title.Contains("Dune")), "late hits reach the RSS feed");
         await UntilSearchesSettled();
 
         var rss = await chaptarr.RssAsync();
