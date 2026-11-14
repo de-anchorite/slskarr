@@ -5,11 +5,13 @@ Soulseek network via [slskd](https://github.com/slskd/slskd). It presents itself
 an **indexer** and a **download client** by emulating existing, well-known API contracts, so no *arr
 plugin is needed.
 
-> Status: pre-design. No code yet. Update this file as decisions land.
+> Status: v1 ebook implementation (Chaptarr/Readarr) is built and covered by unit and in-process
+> integration tests. Pre-release: the manual checklist against real slskd/Chaptarr/Prowlarr is pending
+> (see README).
 
-## Working assumptions (to be confirmed in design)
+## Design (v1)
 
-- Indexer face: **Newznab** API (`t=caps`, `search`, `tvsearch`, `movie`, `music`, `book`), RSS/XML output.
+- Indexer face: **Newznab** API (`t=caps`, `search`, `book`), RSS/XML output. `tvsearch`, `movie` and `music` are not implemented yet.
 - Download client face: **SABnzbd** API (`mode=version|get_config|fullstatus|addfile|queue|history|retry`).
 - The "NZB" handed out is a stub carrying a Slskarr release ID. *arr validation requires
   well-formed XML, root `<nzb>`, and at least one `<file>` element.
@@ -31,10 +33,12 @@ Requires the .NET 10 SDK (`global.json`).
 dotnet build                      # build the solution
 dotnet test                       # run all tests
 dotnet run --project src/Slskarr  # run (needs Slskarr__Slskd__Url and Slskarr__Slskd__ApiKey)
+docker build -t slskarr:dev .     # image (listens on 8080, data in /data)
+docker compose -f examples/docker-compose.yml config   # validate the example stack
 ```
 
 Configuration binds from the `Slskarr` section; env vars use `Slskarr__Section__Key`
-(e.g. `Slskarr__Slskd__Url`). Docker commands arrive with the image task.
+(e.g. `Slskarr__Slskd__Url`).
 
 ## Conventions
 

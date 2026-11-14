@@ -1,0 +1,52 @@
+# Example stack: slskd + Chaptarr + Slskarr.
+# The `downloads` volume is mounted at the SAME path (/downloads) in all three containers, so the
+# paths slskd reports are valid for Slskarr and Chaptarr alike.
+services:
+  slskd:
+    image: slskd/slskd:latest
+    environment:
+      SLSKD_REMOTE_CONFIGURATION: "true"
+      SLSKD_SLSK_USERNAME: your-soulseek-username
+      SLSKD_SLSK_PASSWORD: your-soulseek-password
+      SLSKD_API_KEY: change-me-slskd-key   # create an administrator-role key; see README
+      SLSKD_REMOTE_FILE_MANAGEMENT: "true" # lets Slskarr delete imported files
+      SLSKD_DOWNLOADS_DIR: /downloads
+    volumes:
+      - slskd-config:/app
+      - downloads:/downloads
+    ports:
+      - "5030:5030"
+      - "50300:50300"
+
+  slskarr:
+    image: ghcr.io/OWNER/slskarr:latest   # or build: .. (from this directory)
+    depends_on:
+      - slskd
+    environment:
+      Slskarr__Slskd__Url: http://slskd:5030
+      Slskarr__Slskd__ApiKey: change-me-slskd-key
+      Slskarr__Slskd__DownloadsPath: /downloads
+      Slskarr__ApiKey: change-me-slskarr-key
+    volumes:
+      - slskarr-data:/data
+      - downloads:/downloads
+    ports:
+      - "8080:8080"
+
+  chaptarr:
+    image: ghcr.io/OWNER/chaptarr:latest   # replace with the Chaptarr image you use
+    depends_on:
+      - slskarr
+    volumes:
+      - chaptarr-config:/config
+      - downloads:/downloads
+      - books:/books
+    ports:
+      - "8789:8789"
+
+volumes:
+  downloads:
+  slskd-config:
+  slskarr-data:
+  chaptarr-config:
+  books:
