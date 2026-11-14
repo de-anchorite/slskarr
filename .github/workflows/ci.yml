@@ -18,6 +18,7 @@ jobs:
       - run: dotnet test -c Release
 
   docker:
+    needs: build
     runs-on: ubuntu-latest
     permissions:
       contents: read
