@@ -113,6 +113,8 @@ public sealed class FakeDownloadSlskd : ISlskdClient
 
     public bool Unavailable { get; set; }
 
+    public bool PlaceThrows { get; set; }
+
     public int? Place { get; set; }
 
     public string? EnqueueError { get; set; }
@@ -168,7 +170,7 @@ public sealed class FakeDownloadSlskd : ISlskdClient
 
     public Task<int?> GetPlaceInQueueAsync(string username, Guid transferId, CancellationToken ct)
     {
-        if (Unavailable)
+        if (Unavailable || PlaceThrows)
         {
             throw new SlskdUnavailableException("down");
         }

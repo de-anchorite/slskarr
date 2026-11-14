@@ -21,6 +21,9 @@ public sealed class DownloadMonitor(
 {
     private readonly SlskarrOptions _options = options.Value;
 
+    // When slskd first became unreachable for a job; the outage is not held against its stall clock.
+    private readonly Dictionary<Guid, DateTimeOffset> _unreachableSince = [];
+
     protected override async Task ExecuteAsync(CancellationToken stoppingToken)
     {
         while (!stoppingToken.IsCancellationRequested)
@@ -62,6 +65,11 @@ public sealed class DownloadMonitor(
                 .ToListAsync(ct);
         }
 
+        foreach (var gone in _unreachableSince.Keys.Where(k => !ids.Contains(k)).ToList())
+        {
+            _unreachableSince.Remove(gone);
+        }
+
         foreach (var id in ids)
         {
             try
@@ -86,7 +94,22 @@ public sealed class DownloadMonitor(
         }
 
         var now = time.GetUtcNow();
-        var batch = await slskd.GetBatchAsync(job.BatchId, ct);
+        SlskdBatch? batch;
+        try
+        {
+            batch = await slskd.GetBatchAsync(job.BatchId, ct);
+        }
+        catch (SlskdUnavailableException)
+        {
+            _unreachableSince.TryAdd(id, now);
+            throw;
+        }
+
+        if (_unreachableSince.Remove(id, out var since))
+        {
+            job.LastProgressAt = new[] { now, job.LastProgressAt + (now - since) }.Min();
+        }
+
         var transfer = batch?.Transfers.FirstOrDefault(t => t.Filename == job.RemotePath) ?? batch?.Transfers.FirstOrDefault();
         if (transfer is null)
         {
@@ -118,7 +141,18 @@ public sealed class DownloadMonitor(
             else if (SlskdStates.IsQueued(transfer.State))
             {
                 job.State = DownloadState.Queued;
-                var place = await slskd.GetPlaceInQueueAsync(job.Username, transfer.Id, ct);
+                int? place;
+                try
+                {
+                    place = await slskd.GetPlaceInQueueAsync(job.Username, transfer.Id, ct);
+                }
+                catch (SlskdUnavailableException)
+                {
+                    // slskd answered the batch call, so this is the peer being unreachable: position
+                    // unknown, no progress, and the stall clock keeps running.
+                    place = job.PlaceInQueue;
+                }
+
                 if (place != job.PlaceInQueue)
                 {
                     job.PlaceInQueue = place;

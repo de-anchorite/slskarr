@@ -141,6 +141,45 @@ public sealed class DownloadMonitorTests : IDisposable
     }
 
     [Fact]
+    public async Task Offline_peer_queue_position_error_still_stalls()
+    {
+        var job = await _h.AddJob();
+        _h.Slskd.PlaceThrows = true;
+        await _h.Poll();
+        _h.Job(job.Id).State.ShouldBe(DownloadState.Queued);
+
+        _h.Time.Advance(TimeSpan.FromMinutes(61));
+        await _h.Poll();
+
+        var after = _h.Job(job.Id);
+        after.State.ShouldBe(DownloadState.Failed);
+        after.FailMessage.ShouldStartWith("Stalled");
+        _h.Slskd.Cancels.ShouldBe([(_h.Slskd.TransferIdFor(job.BatchId), true)]);
+    }
+
+    [Fact]
+    public async Task Slskd_outage_is_not_counted_toward_stall()
+    {
+        var job = await _h.AddJob();
+        _h.Slskd.Place = 3;
+        await _h.Poll();
+
+        _h.Slskd.Unavailable = true;
+        await _h.Poll();
+        _h.Time.Advance(TimeSpan.FromHours(2));
+        await _h.Poll();
+        _h.Slskd.Unavailable = false;
+        await _h.Poll();
+
+        _h.Job(job.Id).State.ShouldBe(DownloadState.Queued);
+
+        _h.Time.Advance(TimeSpan.FromMinutes(61));
+        await _h.Poll();
+
+        _h.Job(job.Id).FailMessage.ShouldStartWith("Stalled");
+    }
+
+    [Fact]
     public async Task Batch_gone_with_full_size_file_is_completed()
     {
         var job = await _h.AddJob();
