@@ -22,6 +22,9 @@ public sealed class ChaptarrClient(HttpClient http, string apiKey, FakeTimeProvi
     private const int HistoryLimit = 60;
 
     private static readonly TimeSpan Step = TimeSpan.FromMilliseconds(500);
+
+    // Real time per fake step: room for the search worker to act before a sync-wait runs out (60s fake = 2.4s real).
+    private static readonly TimeSpan StepPause = TimeSpan.FromMilliseconds(20);
     private static readonly TimeSpan Guard = TimeSpan.FromSeconds(15);
 
     public sealed record NewznabItem(string Title, string Enclosure, long Size);
@@ -166,7 +169,7 @@ public sealed class ChaptarrClient(HttpClient http, string apiKey, FakeTimeProvi
                     throw new TimeoutException($"{request.Method} {request.RequestUri} did not answer");
                 }
 
-                await Task.WhenAny(send, Task.Delay(5));
+                await Task.WhenAny(send, Task.Delay(StepPause));
                 if (!send.IsCompleted)
                 {
                     time.Advance(Step);

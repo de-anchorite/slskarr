@@ -1,6 +1,8 @@
 using System.Text.Json;
+using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Time.Testing;
 using Shouldly;
+using Slskarr.Search;
 using Slskarr.Tests;
 
 namespace Slskarr.IntegrationTests;
@@ -23,6 +25,8 @@ public sealed class EbookFlowTests : IDisposable
     private const string BatchesPath = "/api/v0/transfers/downloads/batches";
 
     private static readonly TimeSpan Guard = TimeSpan.FromSeconds(15);
+    private static readonly TimeSpan PollInterval = TimeSpan.FromSeconds(5); // Slskarr's default DownloadOptions.PollInterval
+    private static readonly TimeSpan PollGrace = TimeSpan.FromMilliseconds(200);
 
     private readonly string _dataPath = Path.Combine(Path.GetTempPath(), "slskarr-integration", Guid.NewGuid().ToString("N"));
     private readonly FakeTimeProvider _time = new(new DateTimeOffset(2026, 1, 1, 0, 0, 0, TimeSpan.Zero));
@@ -64,7 +68,7 @@ public sealed class EbookFlowTests : IDisposable
         var jobId = nzoId["SLSKARR_".Length..];
 
         var seen = new List<string>();
-        await AdvanceUntil(async () =>
+        await PollUntil(async () =>
         {
             var slot = (await chaptarr.QueueAsync()).SingleOrDefault(s => s.NzoId == nzoId);
             if (slot is not null && (seen.Count == 0 || seen[^1] != slot.Status))
@@ -86,6 +90,7 @@ public sealed class EbookFlowTests : IDisposable
         (await chaptarr.HistoryAsync()).ShouldBeEmpty();
         _slskd.DownloadedFiles.ShouldBeEmpty();
 
+        await UntilSearchesSettled();
         Posts(SearchesPath).Count.ShouldBe(1);
         Destination(Posts(BatchesPath).ShouldHaveSingleItem()).ShouldBe($"slskarr/{jobId}");
     }
@@ -95,8 +100,8 @@ public sealed class EbookFlowTests : IDisposable
     {
         await StartWithSlowSearch();
 
-        // Past the 90s search and the 10s minimum gap: a search queued by any later tier would have been sent by now.
-        await Advance(TimeSpan.FromSeconds(120));
+        // A search queued by any later tier would run once the first one finishes; wait until nothing is left.
+        await UntilSearchesSettled();
 
         var search = Posts(SearchesPath).ShouldHaveSingleItem();
         JsonDocument.Parse(search.Body).RootElement.GetProperty("searchText").GetString().ShouldBe("Frank Herbert Dune");
@@ -108,6 +113,7 @@ public sealed class EbookFlowTests : IDisposable
         var chaptarr = await StartWithSlowSearch();
 
         await AdvanceUntil(async () => (await chaptarr.RssAsync()).Count > 0, "late hits reach the RSS feed");
+        await UntilSearchesSettled();
 
         var rss = await chaptarr.RssAsync();
         rss.Select(i => i.Title).ShouldContain(t => t.Contains("Dune") && t.Contains("EPUB"));
@@ -135,7 +141,7 @@ public sealed class EbookFlowTests : IDisposable
         var chaptarr = Start();
         var nzoId = await GrabTopAsync(chaptarr);
 
-        await AdvanceUntil(async () => (await chaptarr.HistoryAsync()).Any(s => s.NzoId == nzoId), "the failure reaches history");
+        await PollUntil(async () => (await chaptarr.HistoryAsync()).Any(s => s.NzoId == nzoId), "the failure reaches history");
         var failed = (await chaptarr.HistoryAsync()).ShouldHaveSingleItem();
         failed.Status.ShouldBe("Failed");
         failed.FailMessage.ShouldContain("Errored");
@@ -144,7 +150,7 @@ public sealed class EbookFlowTests : IDisposable
         (await chaptarr.QueueAsync()).ShouldContain(s => s.NzoId == nzoId);
         (await chaptarr.HistoryAsync()).ShouldBeEmpty();
 
-        await AdvanceUntil(async () => (await chaptarr.HistoryAsync()).Any(s => s.NzoId == nzoId), "the retry finishes");
+        await PollUntil(async () => (await chaptarr.HistoryAsync()).Any(s => s.NzoId == nzoId), "the retry finishes");
         var done = (await chaptarr.HistoryAsync()).ShouldHaveSingleItem();
         done.Status.ShouldBe("Completed");
         done.FailMessage.ShouldBe("");
@@ -167,13 +173,13 @@ public sealed class EbookFlowTests : IDisposable
         ]);
         var chaptarr = Start();
         var nzoId = await GrabTopAsync(chaptarr);
-        await AdvanceUntil(async () => (await chaptarr.QueueAsync()).Any(s => s.NzoId == nzoId && s.Status == "Downloading"),
+        await PollUntil(async () => (await chaptarr.QueueAsync()).Any(s => s.NzoId == nzoId && s.Status == "Downloading"),
             "the transfer is in progress");
 
         chaptarr = Restart();
 
         (await chaptarr.QueueAsync()).ShouldContain(s => s.NzoId == nzoId);
-        await AdvanceUntil(async () => (await chaptarr.HistoryAsync()).Any(s => s.NzoId == nzoId), "the monitor completes the job");
+        await PollUntil(async () => (await chaptarr.HistoryAsync()).Any(s => s.NzoId == nzoId), "the monitor completes the job");
         (await chaptarr.HistoryAsync()).ShouldHaveSingleItem().Status.ShouldBe("Completed");
         Posts(BatchesPath).Count.ShouldBe(1);
     }
@@ -247,14 +253,66 @@ public sealed class EbookFlowTests : IDisposable
         }
     }
 
-    private async Task Advance(TimeSpan total)
+    /// <summary>
+    /// Like <see cref="AdvanceUntil"/>, but moves fake time on only to the download monitor's next poll and checks
+    /// <paramref name="done"/> between polls, so no state the monitor passes through is skipped however slowly
+    /// the host runs. Time goes beyond the poll interval only when the poll does not come (the monitor re-armed
+    /// its timer late, or has nothing left to poll because the job just finished).
+    /// </summary>
+    private async Task PollUntil(Func<Task<bool>> done, string because)
     {
-        for (var moved = TimeSpan.Zero; moved < total; moved += TimeSpan.FromSeconds(1))
+        var deadline = DateTime.UtcNow + Guard;
+        while (!await done())
         {
-            _time.Advance(TimeSpan.FromSeconds(1));
-            await Task.Delay(5);
+            var before = BatchPolls();
+            var advanced = TimeSpan.Zero;
+            while (BatchPolls() == before)
+            {
+                if (DateTime.UtcNow > deadline)
+                {
+                    throw new TimeoutException($"Timed out at fake {_time.GetUtcNow():O} waiting until {because}");
+                }
+
+                if (advanced < PollInterval)
+                {
+                    _time.Advance(TimeSpan.FromSeconds(1));
+                    advanced += TimeSpan.FromSeconds(1);
+                    await Task.Delay(2);
+                    continue;
+                }
+
+                var wait = DateTime.UtcNow + PollGrace;
+                while (BatchPolls() == before && DateTime.UtcNow < wait)
+                {
+                    await Task.Delay(2);
+                }
+
+                if (BatchPolls() == before)
+                {
+                    if (await done())
+                    {
+                        return;
+                    }
+
+                    _time.Advance(TimeSpan.FromSeconds(1));
+                }
+            }
         }
     }
+
+    private int BatchPolls() =>
+        _slskd.Requests.Count(r => r.Method == "GET" && r.Path.StartsWith(BatchesPath + "/", StringComparison.Ordinal));
+
+    /// <summary>
+    /// Advances until the first slskd search has finished and the search worker has nothing queued or running,
+    /// so a count of searches taken afterwards includes everything the worker was ever going to send.
+    /// </summary>
+    private Task UntilSearchesSettled() => AdvanceUntil(() =>
+    {
+        var finished = _slskd.Requests.Any(r => r.Method == "DELETE" && r.Path.StartsWith(SearchesPath + "/", StringComparison.Ordinal));
+        var status = _factory!.Services.GetRequiredService<SearchCoordinator>().Status();
+        return Task.FromResult(finished && status is { Queued: 0, Running: null });
+    }, "the search worker is idle");
 
     private List<FakeSlskd.RecordedRequest> Posts(string path) =>
         [.. _slskd.Requests.Where(r => r.Method == "POST" && r.Path == path)];
