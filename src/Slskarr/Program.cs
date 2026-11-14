@@ -4,6 +4,7 @@ using Slskarr.Configuration;
 using Slskarr.Data;
 using Slskarr.Profiles;
 using Slskarr.Profiles.Ebook;
+using Slskarr.Soulseek;
 
 var builder = WebApplication.CreateBuilder(args);
 
@@ -13,12 +14,8 @@ builder.Services.AddSlskarrData();
 builder.Services.AddSingleton<EbookNameParser>();
 builder.Services.AddSingleton<IMediaProfile, EbookProfile>();
 builder.Services.AddSingleton<ProfileRegistry>();
-builder.Services.AddHttpClient("slskd", (sp, client) =>
-{
-    var slskd = sp.GetRequiredService<IOptions<SlskarrOptions>>().Value.Slskd;
-    client.BaseAddress = slskd.Url;
-    client.DefaultRequestHeaders.Add("X-API-Key", slskd.ApiKey);
-});
+builder.Services.AddHttpClient<ISlskdClient, SlskdClient>("slskd", (sp, client) =>
+    SlskdClient.Configure(client, sp.GetRequiredService<IOptions<SlskarrOptions>>().Value.Slskd));
 
 var app = builder.Build();
 
