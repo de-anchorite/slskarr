@@ -1,11 +1,16 @@
 using Microsoft.Extensions.DependencyInjection.Extensions;
 using Microsoft.Extensions.Options;
 using Slskarr.Configuration;
+using Slskarr.Profiles;
+using Slskarr.Profiles.Ebook;
 
 var builder = WebApplication.CreateBuilder(args);
 
 builder.Services.AddSlskarrOptions(builder.Configuration);
 builder.Services.TryAddSingleton(TimeProvider.System);
+builder.Services.AddSingleton<EbookNameParser>();
+builder.Services.AddSingleton<IMediaProfile, EbookProfile>();
+builder.Services.AddSingleton<ProfileRegistry>();
 builder.Services.AddHttpClient("slskd", (sp, client) =>
 {
     var slskd = sp.GetRequiredService<IOptions<SlskarrOptions>>().Value.Slskd;
