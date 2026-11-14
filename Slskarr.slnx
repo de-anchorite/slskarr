@@ -3,6 +3,7 @@
     <Project Path="src/Slskarr/Slskarr.csproj" />
   </Folder>
   <Folder Name="/tests/">
+    <Project Path="tests/Slskarr.IntegrationTests/Slskarr.IntegrationTests.csproj" />
     <Project Path="tests/Slskarr.Tests/Slskarr.Tests.csproj" />
   </Folder>
 </Solution>

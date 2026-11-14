@@ -11,9 +11,14 @@ namespace Slskarr.Tests;
 /// In-process Slskarr host for endpoint tests. Supplies valid defaults (slskd URL and key, a unique
 /// temp data path), a <see cref="FakeTimeProvider"/>, and routes the slskd HttpClient to a test handler.
 /// </summary>
+/// <remarks>
+/// Pass <c>dataPath</c> and <c>time</c> to simulate a restart: a second factory on the same data path and
+/// clock sees the first one's database. A caller-supplied data path is left for the caller to delete.
+/// </remarks>
 public sealed class SlskarrFactory : WebApplicationFactory<Program>
 {
-    private readonly string _dataPath = Path.Combine(Path.GetTempPath(), "slskarr-tests", Guid.NewGuid().ToString("N"));
+    private readonly string _dataPath;
+    private readonly bool _ownsDataPath;
     private readonly Dictionary<string, string?> _config = new()
     {
         ["Slskarr:Slskd:Url"] = "http://slskd.test",
@@ -22,12 +27,15 @@ public sealed class SlskarrFactory : WebApplicationFactory<Program>
     private Func<HttpMessageHandler>? _slskdHandler;
     private Action<IServiceCollection>? _services;
 
-    public SlskarrFactory()
+    public SlskarrFactory(string? dataPath = null, FakeTimeProvider? time = null)
     {
+        _ownsDataPath = dataPath is null;
+        _dataPath = dataPath ?? Path.Combine(Path.GetTempPath(), "slskarr-tests", Guid.NewGuid().ToString("N"));
         _config["Slskarr:DataPath"] = _dataPath;
+        Time = time ?? new FakeTimeProvider(new DateTimeOffset(2026, 1, 1, 0, 0, 0, TimeSpan.Zero));
     }
 
-    public FakeTimeProvider Time { get; } = new(new DateTimeOffset(2026, 1, 1, 0, 0, 0, TimeSpan.Zero));
+    public FakeTimeProvider Time { get; }
 
     /// <summary>Routes the slskd HttpClient to the given handler (WireMock or FakeSlskd).</summary>
     public SlskarrFactory WithSlskdHandler(Func<HttpMessageHandler> handler)
@@ -69,7 +77,7 @@ public sealed class SlskarrFactory : WebApplicationFactory<Program>
     protected override void Dispose(bool disposing)
     {
         base.Dispose(disposing);
-        if (disposing && Directory.Exists(_dataPath))
+        if (disposing && _ownsDataPath && Directory.Exists(_dataPath))
         {
             Directory.Delete(_dataPath, recursive: true);
         }
