@@ -240,4 +240,21 @@ public sealed class NewznabContractTests : IDisposable
             .ShouldBe("https://indexer.example.org/newznab/api?t=get&id=AAAAAAAAAAAAAAAAAAAAAA&apikey=secret");
         item.Element("comments")!.Value.ShouldBe("https://indexer.example.org/release/AAAAAAAAAAAAAAAAAAAAAA");
     }
+
+    [Fact]
+    public async Task Poisoned_names_do_not_break_feed_or_get()
+    {
+        await Seed(null,
+            Hit("AAAAAAAAAAAAAAAAAAAAAA", "Bad\u0001Title \ud800", author: "Au\u0003thor", book: "Bo\u0004ok"),
+            Hit("BBBBBBBBBBBBBBBBBBBBBB", "Fine"));
+        using var client = _factory.CreateClient();
+
+        var feed = await client.GetAsync("/newznab/api?t=book");
+        feed.StatusCode.ShouldBe(HttpStatusCode.OK);
+        (await Xml(feed)).Descendants("item").Count().ShouldBe(2);
+
+        var get = await client.GetAsync("/newznab/api?t=get&id=AAAAAAAAAAAAAAAAAAAAAA");
+        get.StatusCode.ShouldBe(HttpStatusCode.OK);
+        StubNzb.ReadHitId(await get.Content.ReadAsStreamAsync()).ShouldBe("AAAAAAAAAAAAAAAAAAAAAA");
+    }
 }

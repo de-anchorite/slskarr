@@ -16,20 +16,20 @@ public static class StubNzb
 
     public static byte[] Build(HitEntity hit)
     {
-        var fileName = hit.RemotePath[(hit.RemotePath.LastIndexOfAny(['\\', '/']) + 1)..];
+        var fileName = XmlText.Clean(hit.RemotePath[(hit.RemotePath.LastIndexOfAny(['\\', '/']) + 1)..]);
         var doc = new XDocument(
             new XDeclaration("1.0", "utf-8", null),
             new XElement(Ns + "nzb",
                 new XElement(Ns + "head",
-                    new XElement(Ns + "meta", new XAttribute("type", IdMeta), hit.Id),
-                    new XElement(Ns + "meta", new XAttribute("type", "name"), hit.ReleaseTitle)),
+                    new XElement(Ns + "meta", new XAttribute("type", IdMeta), XmlText.Clean(hit.Id)),
+                    new XElement(Ns + "meta", new XAttribute("type", "name"), XmlText.Clean(hit.ReleaseTitle))),
                 new XElement(Ns + "file",
                     new XAttribute("poster", "slskarr"),
                     new XAttribute("date", hit.SeenAt.ToUnixTimeSeconds()),
-                    new XAttribute("subject", $"slskarr:{hit.Id} \"{fileName}\""),
+                    new XAttribute("subject", $"slskarr:{XmlText.Clean(hit.Id)} \"{fileName}\""),
                     new XElement(Ns + "groups", new XElement(Ns + "group", "alt.binaries.slskarr")),
                     new XElement(Ns + "segments",
-                        new XElement(Ns + "segment", new XAttribute("bytes", hit.Size), new XAttribute("number", 1), $"{hit.Id}@slskarr")))));
+                        new XElement(Ns + "segment", new XAttribute("bytes", hit.Size), new XAttribute("number", 1), $"{XmlText.Clean(hit.Id)}@slskarr")))));
         return Serialize(doc);
     }
 

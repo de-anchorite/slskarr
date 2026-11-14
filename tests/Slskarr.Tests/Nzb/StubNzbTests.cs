@@ -59,4 +59,19 @@ public sealed class StubNzbTests
         StubNzb.ReadHitId(new MemoryStream(System.Text.Encoding.UTF8.GetBytes(foreign))).ShouldBeNull();
         StubNzb.ReadHitId(new MemoryStream("not xml"u8.ToArray())).ShouldBeNull();
     }
+
+    [Fact]
+    public void Invalid_xml_chars_in_names_are_sanitised()
+    {
+        var hit = Hit("AAAAAAAAAAAAAAAAAAAAAA", "Bad\u0001Title \ud800 \ud83d\ude00 \u4e2d");
+        hit.RemotePath = "@@a\\dir\\bad\u0002name.epub";
+
+        var bytes = StubNzb.Build(hit);
+
+        using var reader = XmlReader.Create(new MemoryStream(bytes), new XmlReaderSettings { DtdProcessing = DtdProcessing.Ignore });
+        var doc = XDocument.Load(reader);
+        doc.Root!.Elements(NzbNs + "file").Count().ShouldBe(1);
+        doc.Descendants(NzbNs + "meta").Single(m => (string?)m.Attribute("type") == "name").Value.ShouldContain("\ud83d\ude00");
+        StubNzb.ReadHitId(new MemoryStream(bytes)).ShouldBe(hit.Id);
+    }
 }

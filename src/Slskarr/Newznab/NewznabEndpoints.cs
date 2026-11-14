@@ -57,7 +57,7 @@ public static class NewznabEndpoints
                     var hit = string.IsNullOrEmpty(id) ? null : await db.Hits.AsNoTracking().SingleOrDefaultAsync(h => h.Id == id, ct);
                     return hit is null
                         ? Error(300, "No such item")
-                        : Results.File(StubNzb.Build(hit), "application/x-nzb", hit.ReleaseTitle + ".nzb");
+                        : Results.File(StubNzb.Build(hit), "application/x-nzb", XmlText.Clean(hit.ReleaseTitle) + ".nzb");
                 }
 
             default:

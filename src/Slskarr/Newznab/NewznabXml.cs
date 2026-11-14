@@ -50,8 +50,8 @@ internal static class NewznabXml
             + (string.IsNullOrWhiteSpace(apiKey) ? "" : $"&apikey={Uri.EscapeDataString(apiKey)}");
         var size = hit.Size.ToString(CultureInfo.InvariantCulture);
         var item = new XElement("item",
-            new XElement("title", hit.ReleaseTitle),
-            new XElement("guid", new XAttribute("isPermaLink", "false"), hit.Id),
+            new XElement("title", XmlText.Clean(hit.ReleaseTitle)),
+            new XElement("guid", new XAttribute("isPermaLink", "false"), XmlText.Clean(hit.Id)),
             new XElement("link", url),
             new XElement("comments", $"{baseUrl}/release/{Uri.EscapeDataString(hit.Id)}"),
             new XElement("pubDate", hit.SeenAt.UtcDateTime.ToString("R", CultureInfo.InvariantCulture)),
@@ -62,12 +62,12 @@ internal static class NewznabXml
             Attribute("size", size));
         if (!string.IsNullOrWhiteSpace(hit.ParsedAuthor))
         {
-            item.Add(Attribute("author", hit.ParsedAuthor));
+            item.Add(Attribute("author", XmlText.Clean(hit.ParsedAuthor)));
         }
 
         if (!string.IsNullOrWhiteSpace(hit.ParsedTitle))
         {
-            item.Add(Attribute("booktitle", hit.ParsedTitle));
+            item.Add(Attribute("booktitle", XmlText.Clean(hit.ParsedTitle)));
         }
 
         return item;
