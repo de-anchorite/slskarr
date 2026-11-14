@@ -16,28 +16,32 @@ Slskarr is gentle with the Soulseek network: searches are rate-limited and cache
 ## Quick start (Docker)
 
 See [`examples/docker-compose.yml`](examples/docker-compose.yml) for slskd + Chaptarr + Slskarr.
-The important part: **the downloads volume must be mounted at the same path in slskd, Slskarr and
-Chaptarr**, so the paths slskd reports are valid everywhere.
+The important part: **slskd's downloads directory must be mounted at the same path in slskd and
+Chaptarr**, and `Slskarr__Slskd__DownloadsPath` must be that path, so the storage paths Slskarr reports
+are valid for Chaptarr. Slskarr never reads or writes the downloaded files itself (it asks slskd to
+delete them), so it does not need the downloads volume.
 
 ```bash
 docker run -d --name slskarr -p 8080:8080 \
   -e Slskarr__Slskd__Url=http://slskd:5030 \
   -e Slskarr__Slskd__ApiKey=<slskd api key> \
   -e Slskarr__ApiKey=<key the *arrs will use> \
-  -v slskarr-data:/data -v /path/to/downloads:/downloads \
+  -v slskarr-data:/data \
   ghcr.io/<owner>/slskarr:latest
 ```
 
-The container listens on port 8080 and runs as the non-root `app` user. `/data` (a volume) holds the
-SQLite database.
+The container listens on port 8080 and runs as the non-root `app` user (UID 1654). `/data` (a volume)
+holds the SQLite database. A named volume works as is; a **bind-mounted** `/data` must be writable by
+UID 1654 (for example `chown 1654:1654 /path/to/slskarr-data`).
 
 ## slskd setup
 
 - **API key role:** create the key with the `administrator` role (recommended). A `readwrite` key may
   not see completed transfers (unverified).
 - **File management:** set `remote_file_management: true` in slskd's configuration (env
-  `SLSKD_REMOTE_FILE_MANAGEMENT=true`). This is needed so Slskarr can delete imported files through
-  slskd. Without it the files stay in place and the Slskarr status page shows a warning.
+  `SLSKD_REMOTE_FILE_MANAGEMENT=true`). This is needed so Slskarr can delete imported files, and the
+  partial files of removed downloads, through slskd. Without it the files stay in place and the Slskarr
+  status page shows a warning.
 - slskd >= 0.26.
 
 ## Chaptarr setup
@@ -83,7 +87,7 @@ Required: `Slskarr__Slskd__Url` and `Slskarr__Slskd__ApiKey`. Slskarr refuses to
 | `Slskarr__DataPath` | `/data` | Directory for the SQLite database. |
 | `Slskarr__Slskd__Url` | (required) | slskd base URL, e.g. `http://slskd:5030`. |
 | `Slskarr__Slskd__ApiKey` | (required) | slskd API key. |
-| `Slskarr__Slskd__DownloadsPath` | `/downloads` | slskd's downloads directory as Slskarr sees it. |
+| `Slskarr__Slskd__DownloadsPath` | `/downloads` | slskd's downloads directory as the *arr sees it (the start of reported storage paths). |
 | `Slskarr__Paths__StorageRewriteFrom` | (unset) | Path prefix to replace in storage paths reported to the *arr. |
 | `Slskarr__Paths__StorageRewriteTo` | (unset) | Replacement prefix. |
 | `Slskarr__Search__SyncWait` | `00:01:00` | How long a search request waits for results before returning. |
@@ -93,14 +97,14 @@ Required: `Slskarr__Slskd__Url` and `Slskarr__Slskd__ApiKey`. Slskarr refuses to
 | `Slskarr__Search__ResultCap` | `50` | Maximum releases returned per search. |
 | `Slskarr__Search__CacheTtl` | `06:00:00` | How long search results are cached. |
 | `Slskarr__Search__QueuedExpiry` | `1.00:00:00` | How long a queued search stays valid. |
-| `Slskarr__Search__SlskdSearchTimeoutSeconds` | `15` | Search timeout passed to slskd. |
+| `Slskarr__Search__SlskdSearchTimeoutSeconds` | `15` | Search timeout passed to slskd (at least 5). |
 | `Slskarr__Search__ResponseLimit` | `200` | Maximum peer responses requested from slskd. |
 | `Slskarr__Search__RssWindow` | `7.00:00:00` | Window of recent releases served for RSS requests. |
-| `Slskarr__Search__Retention` | `30.00:00:00` | How long old search data is kept. |
+| `Slskarr__Search__Retention` | `30.00:00:00` | How long old search results and finished searches are kept. |
 | `Slskarr__Downloads__StallTimeout` | `01:00:00` | A download making no progress for this long is failed. |
 | `Slskarr__Downloads__PollInterval` | `00:00:05` | How often download status is polled from slskd. |
 | `Slskarr__Ebook__SabCategory` | `ebooks` | SABnzbd category for ebooks. |
-| `Slskarr__Ebook__Extensions__N` | `epub azw3 azw mobi pdf fb2 djvu cbz cbr` | Accepted file extensions. |
+| `Slskarr__Ebook__Extensions__N` | `epub azw3 azw mobi pdf fb2 djvu cbz cbr` | Accepted file extensions (case and a leading `.` are ignored). |
 | `Slskarr__Ebook__FormatPreference__N` | `epub azw3 mobi azw pdf fb2 djvu cbz cbr` | Format preference order (used by the `Format` ranking criterion). |
 | `Slskarr__Ebook__MinSizeBytes` | `10240` | Minimum file size. |
 | `Slskarr__Ebook__MaxSizeBytes` | `209715200` | Maximum file size (200 MiB). |
@@ -108,8 +112,8 @@ Required: `Slskarr__Slskd__Url` and `Slskarr__Slskd__ApiKey`. Slskarr refuses to
 
 ## Path mapping
 
-Slskarr reports slskd's storage paths to the *arr, so all three apps need the downloads directory at
-the same path. If you cannot do that, set `Slskarr__Paths__StorageRewriteFrom` / `...RewriteTo` to
+Slskarr reports slskd's storage paths to the *arr, so slskd and the *arr need the downloads directory
+at the same path (Slskarr itself does not mount it). If you cannot do that, set `Slskarr__Paths__StorageRewriteFrom` / `...RewriteTo` to
 rewrite the prefix Slskarr reports, or use a Remote Path Mapping in the *arr.
 
 A slskd hosted on **Windows** replaces `: * ? " < > |` in file names with `_`, so reported storage

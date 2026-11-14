@@ -1,6 +1,7 @@
 # Example stack: slskd + Chaptarr + Slskarr.
-# The `downloads` volume is mounted at the SAME path (/downloads) in all three containers, so the
-# paths slskd reports are valid for Slskarr and Chaptarr alike.
+# The `downloads` volume is mounted at the SAME path (/downloads) in slskd and Chaptarr, so the
+# paths Slskarr reports (Slskarr__Slskd__DownloadsPath + file) are valid for Chaptarr. Slskarr itself
+# never touches the files (it asks slskd to delete them), so it does not mount the volume.
 services:
   slskd:
     image: slskd/slskd:latest
@@ -28,8 +29,7 @@ services:
       Slskarr__Slskd__DownloadsPath: /downloads
       Slskarr__ApiKey: change-me-slskarr-key
     volumes:
-      - slskarr-data:/data
-      - downloads:/downloads
+      - slskarr-data:/data   # a bind mount here must be writable by UID 1654 (the image's app user)
     ports:
       - "8080:8080"
 
