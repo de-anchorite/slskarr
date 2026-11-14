@@ -42,8 +42,8 @@ Configuration binds from the `Slskarr` section; env vars use `Slskarr__Section__
 
 Versioning: the version is not stored in code. It comes from the `v*` git tag: CI passes it as
 `-p:Version` (Docker `VERSION` build arg). Untagged builds are `0.0.0-dev`. `AppVersion.Current`
-exposes it. Features branch off `develop`. A release is `develop` merged to `main`, then a tag on
-`main`; see README "Versioning and releases".
+exposes it. `develop` is the only long-lived branch: features branch off it, and a release is a `v*` tag on
+`develop`. See README "Versioning and releases".
 
 ## Conventions
 

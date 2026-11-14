@@ -135,12 +135,13 @@ Slskarr uses [semantic versioning](https://semver.org). The version comes from t
 not stored in the code: local and branch builds report `0.0.0-dev`. The running version shows in
 the startup log, on the status page (`/`) and in `GET /health`.
 
-Branches: features branch off `develop` and merge back into it by PR. `main` holds released code.
+Branches: `develop` is the only long-lived branch. Features branch off it and merge back by PR.
+A release is a tag on `develop`.
 
 To release:
 
-1. Merge `develop` into `main`, and wait for CI to go green.
-2. Tag `main` and push the tag:
+1. Make sure CI is green on the `develop` commit you want to release.
+2. Tag that commit and push the tag:
    ```bash
    git tag v0.1.0
    git push origin v0.1.0
