@@ -23,6 +23,9 @@ namespace Slskarr.Data.Migrations
                         .ValueGeneratedOnAdd()
                         .HasColumnType("TEXT");
 
+                    b.Property<Guid>("BatchId")
+                        .HasColumnType("TEXT");
+
                     b.Property<long>("BytesDone")
                         .HasColumnType("INTEGER");
 

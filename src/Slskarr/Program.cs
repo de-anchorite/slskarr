@@ -3,6 +3,7 @@ using Microsoft.Extensions.DependencyInjection.Extensions;
 using Microsoft.Extensions.Options;
 using Slskarr.Configuration;
 using Slskarr.Data;
+using Slskarr.Downloads;
 using Slskarr.Newznab;
 using Slskarr.Profiles;
 using Slskarr.Profiles.Ebook;
@@ -29,6 +30,9 @@ builder.Services.AddSingleton<Ranker>();
 builder.Services.AddSingleton<SearchThrottle>();
 builder.Services.AddSingleton<SearchCoordinator>();
 builder.Services.AddHostedService<SearchWorker>();
+builder.Services.AddSingleton<FileManagementStatus>();
+builder.Services.AddSingleton<DownloadManager>();
+builder.Services.AddHostedService<DownloadMonitor>();
 
 var app = builder.Build();
 

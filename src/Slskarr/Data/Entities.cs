@@ -63,10 +63,12 @@ public sealed class SearchJobEntity
     public string? Error { get; set; }
 }
 
-/// <summary>A queued download. <see cref="Id"/> is also the slskd batch id; nzo_id is <c>"SLSKARR_" + Id:N</c>.</summary>
+/// <summary>A queued download. <see cref="BatchId"/> is the slskd batch id (a retry needs a fresh one); nzo_id is <c>"SLSKARR_" + Id:N</c>.</summary>
 public sealed class DownloadJobEntity
 {
     public Guid Id { get; set; }
+
+    public Guid BatchId { get; set; }
 
     public required string HitId { get; set; }
 
