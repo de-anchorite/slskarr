@@ -129,6 +129,35 @@ dotnet test
 docker build -t slskarr:dev .
 ```
 
+## Versioning and releases
+
+Slskarr uses [semantic versioning](https://semver.org). The version comes from the git tag and is
+not stored in the code: local and branch builds report `0.0.0-dev`. The running version shows in
+the startup log, on the status page (`/`) and in `GET /health`.
+
+Branches: features branch off `develop` and merge back into it by PR. `main` holds released code.
+
+To release:
+
+1. Merge `develop` into `main`, and wait for CI to go green.
+2. Tag `main` and push the tag:
+   ```bash
+   git tag v0.1.0
+   git push origin v0.1.0
+   ```
+3. CI runs the tests, then builds and pushes `ghcr.io/<owner>/slskarr`, then creates a GitHub
+   Release with generated notes.
+
+| Tag | Image tags | GitHub Release |
+|---|---|---|
+| `v1.2.3` | `1.2.3`, `1.2`, `latest` | normal |
+| `v1.2.3-rc.1` | `1.2.3-rc.1` | pre-release |
+
+Before 1.0, bump the minor version for features and the patch version for fixes. Tag `v1.0.0` once
+the checklist below passes against real apps.
+
+To build a versioned image by hand: `docker build --build-arg VERSION=1.2.3 -t slskarr:1.2.3 .`
+
 ## Testing against real apps
 
 Automated tests use a fake slskd only. Before a release, with a throwaway Soulseek account:

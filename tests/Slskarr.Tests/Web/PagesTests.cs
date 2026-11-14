@@ -128,6 +128,17 @@ public sealed class PagesTests : IDisposable
         (await res.Content.ReadAsStringAsync()).ShouldContain("unreachable");
     }
 
+    [Fact]
+    public async Task Status_page_shows_slskarr_version()
+    {
+        var (_, c) = Start(Version);
+
+        var html = await c.GetStringAsync("/");
+
+        html.ShouldContain("Slskarr version");
+        html.ShouldContain(Slskarr.AppVersion.Current);
+    }
+
     private sealed class HangingHandler : HttpMessageHandler
     {
         protected override async Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken ct)

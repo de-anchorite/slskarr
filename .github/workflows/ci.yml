@@ -30,10 +30,13 @@ jobs:
         uses: docker/metadata-action@v5
         with:
           images: ghcr.io/${{ github.repository_owner }}/slskarr
+          # latest moves only on stable tags (v1.2.3), never on pre-releases (v1.2.3-rc.1).
+          # semver {{major}}.{{minor}} is skipped for pre-releases by metadata-action itself.
+          flavor: latest=false
           tags: |
             type=semver,pattern={{version}}
             type=semver,pattern={{major}}.{{minor}}
-            type=raw,value=latest,enable=${{ startsWith(github.ref, 'refs/tags/v') }}
+            type=raw,value=latest,enable=${{ startsWith(github.ref, 'refs/tags/v') && !contains(github.ref_name, '-') }}
       - if: startsWith(github.ref, 'refs/tags/v')
         uses: docker/login-action@v3
         with:
@@ -46,3 +49,22 @@ jobs:
           push: ${{ startsWith(github.ref, 'refs/tags/v') }}
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
+          # The app version is the tag without the leading v; other builds are 0.0.0-dev.
+          build-args: |
+            VERSION=${{ startsWith(github.ref, 'refs/tags/v') && steps.meta.outputs.version || '0.0.0-dev' }}
+
+  release:
+    needs: docker
+    if: startsWith(github.ref, 'refs/tags/v')
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - name: Create GitHub Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ github.ref_name }}
+        run: |
+          prerelease=""
+          if [[ "$TAG" == *-* ]]; then prerelease="--prerelease"; fi
+          gh release create "$TAG" --repo "$GITHUB_REPOSITORY" --verify-tag --generate-notes --title "$TAG" $prerelease

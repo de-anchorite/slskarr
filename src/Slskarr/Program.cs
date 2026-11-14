@@ -1,6 +1,7 @@
 using Microsoft.AspNetCore.HttpOverrides;
 using Microsoft.Extensions.DependencyInjection.Extensions;
 using Microsoft.Extensions.Options;
+using Slskarr;
 using Slskarr.Configuration;
 using Slskarr.Data;
 using Slskarr.Downloads;
@@ -38,6 +39,8 @@ builder.Services.AddHostedService<DownloadMonitor>();
 
 var app = builder.Build();
 
+app.Logger.LogInformation("Slskarr {Version} starting", AppVersion.Current);
+
 app.Services.MigrateSlskarrDb();
 
 if (string.IsNullOrWhiteSpace(app.Services.GetRequiredService<IOptions<SlskarrOptions>>().Value.ApiKey))
@@ -47,7 +50,7 @@ if (string.IsNullOrWhiteSpace(app.Services.GetRequiredService<IOptions<SlskarrOp
 
 app.UseForwardedHeaders();
 
-app.MapGet("/health", () => Results.Json(new { status = "ok" }));
+app.MapGet("/health", () => Results.Json(new { status = "ok", version = AppVersion.Current }));
 
 app.MapNewznab();
 app.MapSabnzbd();

@@ -56,6 +56,7 @@ public static class Pages
         }
 
         h.Raw("<h2>Queue</h2><table>");
+        Row(h, "Slskarr version", AppVersion.Current);
         Row(h, "slskd version", version);
         Row(h, "Queued searches", q.Queued.ToString(CultureInfo.InvariantCulture));
         Row(h, "Running search", q.Running ?? "none");
