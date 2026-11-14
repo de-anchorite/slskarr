@@ -57,7 +57,11 @@ public sealed class DownloadHarness : IDisposable
 
     public DownloadManager Manager { get; }
 
-    public DownloadMonitor Monitor { get; }
+    public DownloadMonitor Monitor { get; private set; }
+
+    /// <summary>Simulates a process restart for the monitor: a new instance, constructed at the current fake time.</summary>
+    public void RestartMonitor() =>
+        Monitor = new DownloadMonitor(Db, Slskd, Options, Time, NullLogger<DownloadMonitor>.Instance);
 
     public const string IncompleteFile = "peer/Books/Frank Herbert/Frank Herbert - Dune (1965).epub";
 

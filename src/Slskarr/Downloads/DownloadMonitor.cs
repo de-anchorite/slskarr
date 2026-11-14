@@ -31,6 +31,11 @@ public sealed class DownloadMonitor(
     // When slskd first became unreachable for a job; the outage is not held against its stall clock.
     private readonly Dictionary<Guid, DateTimeOffset> _unreachableSince = [];
 
+    // Slskarr's own downtime is not held against a job's stall clock either: until a job's first poll in this
+    // process has been saved, its clock is moved up to the time this process started.
+    private readonly DateTimeOffset _startedAt = time.GetUtcNow();
+    private readonly HashSet<Guid> _resumed = [];
+
     protected override async Task ExecuteAsync(CancellationToken stoppingToken)
     {
         while (!stoppingToken.IsCancellationRequested)
@@ -77,6 +82,8 @@ public sealed class DownloadMonitor(
             _unreachableSince.Remove(gone);
         }
 
+        _resumed.IntersectWith(ids);
+
         foreach (var id in ids)
         {
             try
@@ -101,6 +108,11 @@ public sealed class DownloadMonitor(
         }
 
         var now = time.GetUtcNow();
+        if (!_resumed.Contains(id) && job.LastProgressAt < _startedAt)
+        {
+            job.LastProgressAt = _startedAt;
+        }
+
         SlskdBatch? batch;
         try
         {
@@ -184,6 +196,8 @@ public sealed class DownloadMonitor(
         {
             await db.SaveChangesAsync(ct);
         }
+
+        _resumed.Add(id);
     }
 
     /// <summary>

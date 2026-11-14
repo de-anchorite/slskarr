@@ -290,4 +290,59 @@ public sealed class DownloadMonitorTests : IDisposable
 
         _h.Job(job.Id).State.ShouldBe(DownloadState.Queued);
     }
+
+    [Fact]
+    public async Task Downtime_before_a_restart_is_not_counted_toward_stall()
+    {
+        var job = await _h.AddJob();
+        _h.Slskd.Place = 5;
+        await _h.Poll();
+
+        _h.Time.Advance(TimeSpan.FromHours(2)); // Slskarr was down
+        _h.RestartMonitor();
+        var restartedAt = _h.Time.GetUtcNow();
+        await _h.Poll();
+
+        var after = _h.Job(job.Id);
+        after.State.ShouldBe(DownloadState.Queued);
+        after.LastProgressAt.ShouldBe(restartedAt);
+        _h.Slskd.Cancels.ShouldBeEmpty();
+
+        _h.Time.Advance(TimeSpan.FromMinutes(61));
+        await _h.Poll();
+
+        _h.Job(job.Id).FailMessage.ShouldStartWith("Stalled");
+    }
+
+    [Fact]
+    public async Task Restart_never_moves_the_stall_clock_back()
+    {
+        var job = await _h.AddJob();
+        _h.Slskd.Place = 5;
+        _h.RestartMonitor();
+        _h.Time.Advance(TimeSpan.FromMinutes(10));
+        var progressAt = _h.Time.GetUtcNow();
+        _h.UpdateJob(job.Id, j => j.LastProgressAt = progressAt);
+
+        await _h.Poll();
+
+        _h.Job(job.Id).LastProgressAt.ShouldBe(progressAt);
+    }
+
+    [Fact]
+    public async Task Restart_adjustment_survives_a_first_poll_that_finds_slskd_down()
+    {
+        var job = await _h.AddJob();
+        _h.Slskd.Place = 5;
+        await _h.Poll();
+
+        _h.Time.Advance(TimeSpan.FromHours(2));
+        _h.RestartMonitor();
+        _h.Slskd.Unavailable = true;
+        await _h.Poll();
+        _h.Slskd.Unavailable = false;
+        await _h.Poll();
+
+        _h.Job(job.Id).State.ShouldBe(DownloadState.Queued);
+    }
 }

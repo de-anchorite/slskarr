@@ -206,6 +206,30 @@ public sealed class EbookFlowTests : IDisposable
         _slskd.Requests.ShouldContain(r => r.Method == "DELETE" && r.Path.StartsWith("/api/v0/files/incomplete/files/", StringComparison.Ordinal));
     }
 
+    [Fact]
+    public async Task Restart_after_downtime_longer_than_stall_timeout_keeps_queued_job()
+    {
+        _config["Slskarr:Downloads:StallTimeout"] = "00:02:00";
+        _slskd.ScriptTransfer(_ => [new(TimeSpan.Zero, "Queued, Remotely", PlaceInQueue: 4)]);
+        var chaptarr = Start();
+        var nzoId = await GrabTopAsync(chaptarr);
+        await PollTimes(2); // the first poll has recorded the queue position
+
+        chaptarr = Restart(downtime: TimeSpan.FromMinutes(10));
+
+        var polled = BatchPolls();
+        await PollUntil(async () => BatchPolls() >= polled + 2 || (await chaptarr.HistoryAsync()).Count > 0,
+            "the restarted monitor has polled the job");
+        (await chaptarr.HistoryAsync()).ShouldBeEmpty();
+        (await chaptarr.QueueAsync()).ShouldHaveSingleItem().Status.ShouldBe("Queued");
+
+        await PollUntil(async () => (await chaptarr.HistoryAsync()).Count > 0, "the job stalls");
+        var failed = (await chaptarr.HistoryAsync()).ShouldHaveSingleItem();
+        failed.NzoId.ShouldBe(nzoId);
+        failed.Status.ShouldBe("Failed");
+        failed.FailMessage.ShouldStartWith("Stalled");
+    }
+
     public void Dispose()
     {
         _http?.Dispose();
@@ -232,12 +256,20 @@ public sealed class EbookFlowTests : IDisposable
         return new ChaptarrClient(_http, ApiKey, _time);
     }
 
-    /// <summary>Stops the host and starts a new one on the same database, clock and slskd.</summary>
-    private ChaptarrClient Restart()
+    /// <summary>Stops the host and starts a new one on the same database, clock and slskd, after <paramref name="downtime"/>.</summary>
+    private ChaptarrClient Restart(TimeSpan downtime = default)
     {
         _http?.Dispose();
         _factory?.Dispose();
+        _time.Advance(downtime);
         return Start();
+    }
+
+    /// <summary>Lets the download monitor poll <paramref name="count"/> more times.</summary>
+    private Task PollTimes(int count)
+    {
+        var target = BatchPolls() + count;
+        return PollUntil(() => Task.FromResult(BatchPolls() >= target), $"{count} more monitor polls");
     }
 
     /// <summary>The search outlasts the sync wait, so every tier comes back empty.</summary>
