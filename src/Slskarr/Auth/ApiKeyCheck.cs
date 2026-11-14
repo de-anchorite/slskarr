@@ -24,6 +24,12 @@ public static class ApiKeyCheck
             return false;
         }
 
+        return Matches(supplied, configured);
+    }
+
+    /// <summary>Constant-time comparison of a supplied credential against the configured key.</summary>
+    public static bool Matches(string supplied, string configured)
+    {
         // Hash first so the comparison is constant-time regardless of length.
         return CryptographicOperations.FixedTimeEquals(
             SHA256.HashData(Encoding.UTF8.GetBytes(supplied)),

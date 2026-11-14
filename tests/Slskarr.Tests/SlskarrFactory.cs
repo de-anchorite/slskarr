@@ -20,6 +20,7 @@ public sealed class SlskarrFactory : WebApplicationFactory<Program>
         ["Slskarr:Slskd:ApiKey"] = "slskd-test-key",
     };
     private Func<HttpMessageHandler>? _slskdHandler;
+    private Action<IServiceCollection>? _services;
 
     public SlskarrFactory()
     {
@@ -32,6 +33,13 @@ public sealed class SlskarrFactory : WebApplicationFactory<Program>
     public SlskarrFactory WithSlskdHandler(Func<HttpMessageHandler> handler)
     {
         _slskdHandler = handler;
+        return this;
+    }
+
+    /// <summary>Applies extra service registrations after the app's own (e.g. a fake ISlskdClient).</summary>
+    public SlskarrFactory WithServices(Action<IServiceCollection> configure)
+    {
+        _services = configure;
         return this;
     }
 
@@ -53,6 +61,8 @@ public sealed class SlskarrFactory : WebApplicationFactory<Program>
             {
                 services.AddHttpClient("slskd").ConfigurePrimaryHttpMessageHandler(handler);
             }
+
+            _services?.Invoke(services);
         });
     }
 

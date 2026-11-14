@@ -12,6 +12,12 @@ public static class StoragePaths
     public static string Storage(SlskdOptions slskd, PathOptions paths, Guid jobId, string remotePath)
     {
         var path = $"{slskd.DownloadsPath.TrimEnd('/')}/{JobDir(jobId)}/{SoulseekPath.FileName(remotePath)}";
+        return Rewrite(paths, path);
+    }
+
+    /// <summary>Applies the configured storage prefix rewrite to a slskd-side path.</summary>
+    public static string Rewrite(PathOptions paths, string path)
+    {
         var from = paths.StorageRewriteFrom?.TrimEnd('/');
         if (!string.IsNullOrEmpty(from) && paths.StorageRewriteTo is { } to
             && path.StartsWith(from + "/", StringComparison.Ordinal))

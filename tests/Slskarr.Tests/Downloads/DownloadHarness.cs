@@ -119,6 +119,8 @@ public sealed class FakeDownloadSlskd : ISlskdClient
 
     public string? EnqueueError { get; set; }
 
+    public bool EnqueueThrows { get; set; }
+
     public SlskdDeleteResult DeleteResult { get; set; } = SlskdDeleteResult.Deleted;
 
     public TaskCompletionSource? EnqueueGate { get; set; }
@@ -146,6 +148,11 @@ public sealed class FakeDownloadSlskd : ISlskdClient
         if (EnqueueGate is { } gate)
         {
             await gate.Task;
+        }
+
+        if (EnqueueThrows)
+        {
+            throw new SlskdUnavailableException("down");
         }
 
         if (EnqueueError is { } error)

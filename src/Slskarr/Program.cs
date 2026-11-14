@@ -7,6 +7,7 @@ using Slskarr.Downloads;
 using Slskarr.Newznab;
 using Slskarr.Profiles;
 using Slskarr.Profiles.Ebook;
+using Slskarr.Sabnzbd;
 using Slskarr.Search;
 using Slskarr.Soulseek;
 
@@ -48,6 +49,7 @@ app.UseForwardedHeaders();
 app.MapGet("/health", () => Results.Json(new { status = "ok" }));
 
 app.MapNewznab();
+app.MapSabnzbd();
 
 app.Run();
 
