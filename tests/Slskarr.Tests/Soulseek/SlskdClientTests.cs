@@ -216,6 +216,42 @@ public sealed class SlskdClientTests : IDisposable
     }
 
     [Fact]
+    public async Task EnqueueBatch_500_from_slskd_is_a_failed_enqueue_with_its_message()
+    {
+        Stub("POST", "/api/v0/transfers/downloads/batches", 500, "  Failed to connect to peer bob: connection refused \n");
+
+        var result = await Client().EnqueueBatchAsync(Guid.NewGuid(), "bob", Remote, 9, Dest, default);
+
+        result.Ok.ShouldBeFalse();
+        result.Batch.ShouldBeNull();
+        result.Error.ShouldBe("slskd could not enqueue the file (500): Failed to connect to peer bob: connection refused");
+    }
+
+    [Fact]
+    public async Task EnqueueBatch_500_message_is_capped()
+    {
+        Stub("POST", "/api/v0/transfers/downloads/batches", 500, new string('x', 1000));
+
+        var result = await Client().EnqueueBatchAsync(Guid.NewGuid(), "bob", Remote, 9, Dest, default);
+
+        result.Ok.ShouldBeFalse();
+        result.Error!.Length.ShouldBeLessThanOrEqualTo(240);
+        result.Error.ShouldNotContain(Key);
+    }
+
+    [Theory]
+    [InlineData(502)]
+    [InlineData(503)]
+    [InlineData(504)]
+    public async Task EnqueueBatch_gateway_errors_mean_slskd_unavailable(int status)
+    {
+        Stub("POST", "/api/v0/transfers/downloads/batches", status, "proxy says no");
+
+        await Should.ThrowAsync<SlskdUnavailableException>(
+            () => Client().EnqueueBatchAsync(Guid.NewGuid(), "bob", Remote, 9, Dest, default));
+    }
+
+    [Fact]
     public async Task GetBatch_maps_404_to_null()
     {
         var id = Guid.NewGuid();

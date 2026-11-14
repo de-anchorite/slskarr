@@ -76,7 +76,7 @@ public sealed class SlskdClient(HttpClient http, TimeProvider time) : ISlskdClie
         for (var attempt = 0; ; attempt++)
         {
             using var response = await SendAsync(
-                () => Req(HttpMethod.Post, "transfers/downloads/batches", body), ct);
+                () => Req(HttpMethod.Post, "transfers/downloads/batches", body), ct, passServerErrors: true);
 
             switch ((int)response.StatusCode)
             {
@@ -95,6 +95,10 @@ public sealed class SlskdClient(HttpClient http, TimeProvider time) : ISlskdClie
                     continue;
                 case 429:
                     return new SlskdEnqueueResult(false, null, "slskd busy (429)");
+                case >= 500 and not (502 or 503 or 504):
+                    // slskd's catch-all for ordinary peer failures (e.g. the peer cannot be connected to).
+                    return new SlskdEnqueueResult(false, null,
+                        $"slskd could not enqueue the file ({(int)response.StatusCode}): {(await BodyAsync(response, ct)).Trim().Trim('"').Trim()}");
                 default:
                     await EnsureSuccessAsync(response, ct);
                     throw new SlskdUnavailableException($"slskd returned unexpected status {(int)response.StatusCode}");
@@ -208,8 +212,12 @@ public sealed class SlskdClient(HttpClient http, TimeProvider time) : ISlskdClie
         return request;
     }
 
-    /// <summary>Sends a request; network failures, timeouts and 5xx become <see cref="SlskdUnavailableException"/>.</summary>
-    private async Task<HttpResponseMessage> SendAsync(Func<HttpRequestMessage> make, CancellationToken ct)
+    /// <summary>
+    /// Sends a request; network failures, timeouts and 5xx become <see cref="SlskdUnavailableException"/>.
+    /// With <paramref name="passServerErrors"/>, 5xx responses are returned for the caller to map.
+    /// </summary>
+    private async Task<HttpResponseMessage> SendAsync(
+        Func<HttpRequestMessage> make, CancellationToken ct, bool passServerErrors = false)
     {
         using var request = make();
         HttpResponseMessage response;
@@ -226,7 +234,7 @@ public sealed class SlskdClient(HttpClient http, TimeProvider time) : ISlskdClie
             throw new SlskdUnavailableException("slskd request timed out", ex);
         }
 
-        if ((int)response.StatusCode >= 500)
+        if ((int)response.StatusCode >= 500 && !passServerErrors)
         {
             var status = (int)response.StatusCode;
             response.Dispose();
