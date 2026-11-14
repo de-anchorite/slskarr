@@ -266,6 +266,39 @@ public sealed class SearchCoordinatorTests : IDisposable
     }
 
     [Fact]
+    public async Task Retention_prunes_old_finished_search_jobs()
+    {
+        var now = _h.Time.GetUtcNow();
+        await using (var db = await _h.Db.CreateDbContextAsync())
+        {
+            db.SearchJobs.AddRange(
+                SearchJob("old-done", SearchJobState.Done, created: now.AddDays(-40), completed: now.AddDays(-31)),
+                SearchJob("old-failed", SearchJobState.Failed, created: now.AddDays(-40), completed: now.AddDays(-31)),
+                SearchJob("old-expired", SearchJobState.Expired, created: now.AddDays(-40), completed: now.AddDays(-31)),
+                SearchJob("old-done-no-completion", SearchJobState.Done, created: now.AddDays(-31), completed: null),
+                SearchJob("recent-done", SearchJobState.Done, created: now.AddDays(-40), completed: now.AddDays(-29)),
+                SearchJob("recent-created", SearchJobState.Done, created: now.AddDays(-29), completed: null));
+            await db.SaveChangesAsync();
+        }
+
+        (await _h.Worker.RunOnceAsync(CancellationToken.None)).ShouldBeFalse();
+
+        _h.Jobs().Select(j => j.Key).ShouldBe(["recent-done", "recent-created"], ignoreOrder: true);
+    }
+
+    private static SearchJobEntity SearchJob(string key, SearchJobState state, DateTimeOffset created, DateTimeOffset? completed) => new()
+    {
+        Key = key,
+        Profile = "ebook",
+        QueryText = key,
+        RequestJson = "{}",
+        State = state,
+        CreatedAt = created,
+        LastRequestedAt = created,
+        CompletedAt = completed,
+    };
+
+    [Fact]
     public async Task Status_reports_queue()
     {
         _ = _h.Coordinator.SearchAsync(AuthorTitle, CancellationToken.None);

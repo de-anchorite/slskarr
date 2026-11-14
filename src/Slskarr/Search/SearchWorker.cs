@@ -9,7 +9,7 @@ namespace Slskarr.Search;
 
 /// <summary>
 /// Runs queued searches against slskd, newest request first (LIFO), within the throttle and the
-/// configured concurrency. Also expires stale queued jobs and prunes old hits.
+/// configured concurrency. Also expires stale queued jobs and prunes old hits and finished searches.
 /// </summary>
 public sealed class SearchWorker(
     SearchCoordinator coordinator,
@@ -161,7 +161,7 @@ public sealed class SearchWorker(
 
         if (now >= _nextPrune)
         {
-            await PruneHitsAsync(db, now, ct);
+            await PruneAsync(db, now, ct);
             _nextPrune = now + PruneInterval;
         }
 
@@ -234,7 +234,25 @@ public sealed class SearchWorker(
         }
     }
 
-    /// <summary>Deletes hits not seen within the retention period, unless a live download refers to them.</summary>
+    /// <summary>
+    /// Deletes hits not seen within the retention period, unless a live download refers to them, and finished
+    /// searches that ended (or, lacking an end, started) before it.
+    /// </summary>
+    private async Task PruneAsync(SlskarrDb db, DateTimeOffset now, CancellationToken ct)
+    {
+        await PruneHitsAsync(db, now, ct);
+
+        var cutoff = now - _options.Retention;
+        var searches = await db.SearchJobs
+            .Where(j => (j.State == SearchJobState.Done || j.State == SearchJobState.Failed || j.State == SearchJobState.Expired)
+                && (j.CompletedAt < cutoff || (j.CompletedAt == null && j.CreatedAt < cutoff)))
+            .ExecuteDeleteAsync(ct);
+        if (searches > 0)
+        {
+            logger.LogInformation("Pruned {Count} finished search(es) older than {Retention}", searches, _options.Retention);
+        }
+    }
+
     private async Task PruneHitsAsync(SlskarrDb db, DateTimeOffset now, CancellationToken ct)
     {
         var cutoff = now - _options.Retention;
