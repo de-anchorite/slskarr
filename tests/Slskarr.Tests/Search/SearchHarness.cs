@@ -8,6 +8,7 @@ using Slskarr.Configuration;
 using Slskarr.Data;
 using Slskarr.Profiles;
 using Slskarr.Profiles.Ebook;
+using Slskarr.Profiles.Music;
 using Slskarr.Search;
 using Slskarr.Soulseek;
 
@@ -37,7 +38,7 @@ public sealed class SearchHarness : IDisposable
         }
 
         Slskd = new FakeSearchSlskd(Time);
-        Registry = new ProfileRegistry([Profile(Options)]);
+        Registry = new ProfileRegistry([Profile(Options), new MusicProfile(Options)]);
         Throttle = new SearchThrottle(Options);
         Coordinator = new SearchCoordinator(Registry, Db, Options, Throttle, Time);
         Worker = NewWorker(Coordinator, Throttle);
@@ -61,12 +62,20 @@ public sealed class SearchHarness : IDisposable
 
     public IMediaProfile Ebook => Registry.All[0];
 
+    public IMediaProfile Music => Registry.All[1];
+
     public static SlskarrOptions DefaultOptions() => new()
     {
         Ebook =
         {
             Extensions = [.. EbookProfileOptions.DefaultExtensions],
             FormatPreference = [.. EbookProfileOptions.DefaultFormatPreference],
+            Ranking = [.. EbookProfileOptions.AllowedRankingCriteria],
+        },
+        Music =
+        {
+            Extensions = [.. MusicProfileOptions.DefaultExtensions],
+            FormatPreference = [.. MusicProfileOptions.DefaultFormatPreference],
             Ranking = [.. EbookProfileOptions.AllowedRankingCriteria],
         },
     };
@@ -139,9 +148,9 @@ public sealed class SearchHarness : IDisposable
         Until(() => Jobs().Any(j => j.Key == key && j.State == SearchJobState.Queued), $"{key} is queued");
 
     /// <summary>Starts a search, lets the worker run the job it queues, and returns the search result.</summary>
-    public async Task<IReadOnlyList<HitEntity>> SearchAndRun(SearchRequest request)
+    public async Task<IReadOnlyList<HitEntity>> SearchAndRun(SearchRequest request, IMediaProfile? profile = null)
     {
-        var key = SearchKey.For(Ebook, request).Value;
+        var key = SearchKey.For(profile ?? Ebook, request).Value;
         var search = Coordinator.SearchAsync(request, CancellationToken.None);
         await Until(() => search.IsCompleted || Jobs().Any(j => j.Key == key && j.State == SearchJobState.Queued), "search queued or done");
         if (!search.IsCompleted)

@@ -43,6 +43,22 @@ public sealed class SearchCoordinatorTests : IDisposable
         _h.Jobs().Count.ShouldBe(1);
     }
 
+    // Review focus: an artist-only request must not be served by (or coalesced onto) the artist+album job.
+    [Fact]
+    public async Task Artist_search_after_album_search_searches_again()
+    {
+        var album = new SearchRequest(null, null, null, [3000], "Radiohead", "OK Computer", "music");
+        var artist = new SearchRequest(null, null, null, [3000], "Radiohead", null, "music");
+        (await _h.SearchAndRun(album, _h.Music)).ShouldBeEmpty();
+        _h.Jobs().Single().State.ShouldBe(SearchJobState.Done);
+
+        _h.Time.Advance(TimeSpan.FromMinutes(5)); // past the throttle gap
+        (await _h.SearchAndRun(artist, _h.Music)).ShouldBeEmpty();
+
+        _h.Slskd.StartedTexts.ShouldBe(["Radiohead OK Computer", "Radiohead"]);
+        _h.Jobs().Select(j => j.Key).Order().ShouldBe([SearchKey.For(_h.Music, album).Value, SearchKey.For(_h.Music, artist).Value]);
+    }
+
     [Fact]
     public async Task Cached_result_returned_without_search()
     {

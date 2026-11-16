@@ -37,23 +37,27 @@ public static class NewznabEndpoints
         }
 
         var q = req.Query;
-        switch (q["t"].ToString().ToLowerInvariant())
+        var function = q["t"].ToString().ToLowerInvariant();
+        switch (function)
         {
             case "caps":
-                return Results.Bytes(NewznabXml.Caps(), "application/xml");
+                return Results.Bytes(NewznabXml.Caps(registry.All), "application/xml");
 
             case "search":
             case "book":
+            case "music":
                 var search = new SearchRequest(
-                    Clean(q["q"]), Clean(q["author"]), Clean(q["title"]), ParseCategories(q["cat"].ToString()));
+                    Clean(q["q"]), Clean(q["author"]), Clean(q["title"]), ParseCategories(q["cat"].ToString()),
+                    Clean(q["artist"]), Clean(q["album"]), function);
                 var offset = ParseInt(q["offset"], 0, 0, int.MaxValue);
                 var limit = ParseInt(q["limit"], MaxLimit, 1, MaxLimit);
                 var hits = await FindAsync(search, offset, limit, registry, coordinator, ct);
                 // An empty first RSS page gets one placeholder so *arr/Prowlarr connection tests pass.
-                var placeholder = search.IsRss && offset == 0 && hits.Count == 0 && registry.ForRequest(search) is not null
-                    ? time.GetUtcNow()
-                    : (DateTimeOffset?)null;
-                return Results.Bytes(NewznabXml.Feed(hits, BaseUrl(req), apiKey, offset, placeholder), Rss);
+                var placeholderProfile = search.IsRss && offset == 0 && hits.Count == 0
+                    ? RssAllProfiles(search) ? registry.All.FirstOrDefault() : registry.ForRequest(search)
+                    : null;
+                var placeholder = placeholderProfile is null ? (DateTimeOffset?)null : time.GetUtcNow();
+                return Results.Bytes(NewznabXml.Feed(hits, registry, placeholderProfile, BaseUrl(req), apiKey, offset, placeholder), Rss);
 
             case "get":
                 var id = q["id"].ToString();
@@ -75,6 +79,11 @@ public static class NewznabEndpoints
     {
         if (search.IsRss)
         {
+            if (RssAllProfiles(search))
+            {
+                return await coordinator.RecentAsync(null, offset, limit, ct);
+            }
+
             var profile = registry.ForRequest(search);
             return profile is null ? [] : await coordinator.RecentAsync(profile, offset, limit, ct);
         }
@@ -82,6 +91,9 @@ public static class NewznabEndpoints
         var found = await coordinator.SearchAsync(search, ct);
         return [.. found.Skip(offset).Take(limit)];
     }
+
+    // A generic t=search RSS poll without categories (Prowlarr's test) covers every profile.
+    private static bool RssAllProfiles(SearchRequest s) => s.Categories.Count == 0 && s.Function is null or "search";
 
     private static IResult Error(int code, string description) => Results.Bytes(NewznabXml.Error(code, description), Rss);
 

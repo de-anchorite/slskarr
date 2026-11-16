@@ -75,12 +75,13 @@ public sealed class SearchCoordinator(
         return await HitsForAsync(db, job, ct);
     }
 
-    public async Task<IReadOnlyList<HitEntity>> RecentAsync(IMediaProfile p, int offset, int limit, CancellationToken ct)
+    public async Task<IReadOnlyList<HitEntity>> RecentAsync(IMediaProfile? p, int offset, int limit, CancellationToken ct)
     {
         var since = time.GetUtcNow() - _options.RssWindow;
+        var profile = p?.Name;
         await using var db = await dbFactory.CreateDbContextAsync(ct);
         return await db.Hits.AsNoTracking()
-            .Where(h => h.Profile == p.Name && h.SeenAt >= since)
+            .Where(h => (profile == null || h.Profile == profile) && h.SeenAt >= since)
             .OrderByDescending(h => h.SeenAt)
             .ThenBy(h => h.SearchKey)
             .ThenBy(h => h.Rank)
@@ -152,7 +153,7 @@ public sealed class SearchCoordinator(
                     && (j.State == SearchJobState.Queued || j.State == SearchJobState.Running || j.State == SearchJobState.Done))
                 .ToListAsync(ct);
             var target = recent
-                .Where(j => SearchKey.TokensOf(j.Key).IsSupersetOf(key.Tokens))
+                .Where(j => j.Key == key.Value || (p.CoalesceBySuperset && SearchKey.TokensOf(j.Key).IsSupersetOf(key.Tokens)))
                 .OrderByDescending(j => j.Key == key.Value)
                 .ThenByDescending(j => j.CreatedAt)
                 .FirstOrDefault();

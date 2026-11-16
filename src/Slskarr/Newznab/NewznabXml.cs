@@ -2,6 +2,7 @@ using System.Globalization;
 using System.Xml.Linq;
 using Slskarr.Data;
 using Slskarr.Nzb;
+using Slskarr.Profiles;
 
 namespace Slskarr.Newznab;
 
@@ -10,26 +11,34 @@ internal static class NewznabXml
 {
     public static readonly XNamespace Attr = "http://www.newznab.com/DTD/2010/feeds/attributes/";
 
-    public static byte[] Caps() => StubNzb.Serialize(new XDocument(new XDeclaration("1.0", "utf-8", null),
-        new XElement("caps",
-            new XElement("server", new XAttribute("title", "Slskarr")),
-            new XElement("limits", new XAttribute("max", 100), new XAttribute("default", 100)),
-            new XElement("searching",
-                new XElement("search", new XAttribute("available", "yes"), new XAttribute("supportedParams", "q")),
-                new XElement("book-search", new XAttribute("available", "yes"), new XAttribute("supportedParams", "q,author,title")),
-                new XElement("tv-search", new XAttribute("available", "no")),
-                new XElement("movie-search", new XAttribute("available", "no")),
-                new XElement("audio-search", new XAttribute("available", "no"))),
-            new XElement("categories",
-                new XElement("category", new XAttribute("id", 7000), new XAttribute("name", "Books"),
-                    new XElement("subcat", new XAttribute("id", 7020), new XAttribute("name", "Books/EBook")))))));
+    public static byte[] Caps(IReadOnlyList<IMediaProfile> profiles)
+    {
+        var searching = new XElement("searching",
+            new XElement("search", new XAttribute("available", "yes"), new XAttribute("supportedParams", "q")),
+            new XElement("book-search", new XAttribute("available", "yes"), new XAttribute("supportedParams", "q,author,title")),
+            new XElement("tv-search", new XAttribute("available", "no")),
+            new XElement("movie-search", new XAttribute("available", "no")),
+            profiles.Any(p => p.CapsCategory.Id == 3000)
+                ? new XElement("audio-search", new XAttribute("available", "yes"), new XAttribute("supportedParams", "q,artist,album"))
+                : new XElement("audio-search", new XAttribute("available", "no")));
+        var categories = new XElement("categories", profiles.Select(p => new XElement("category",
+            new XAttribute("id", p.CapsCategory.Id), new XAttribute("name", p.CapsCategory.Name),
+            p.CapsCategory.Subcats.Select(c => new XElement("subcat", new XAttribute("id", c.Id), new XAttribute("name", c.Name))))));
+        return StubNzb.Serialize(new XDocument(new XDeclaration("1.0", "utf-8", null),
+            new XElement("caps",
+                new XElement("server", new XAttribute("title", "Slskarr")),
+                new XElement("limits", new XAttribute("max", 100), new XAttribute("default", 100)),
+                searching,
+                categories)));
+    }
 
     public static byte[] Error(int code, string description) => StubNzb.Serialize(new XDocument(
         new XDeclaration("1.0", "utf-8", null),
         new XElement("error", new XAttribute("code", code), new XAttribute("description", description))));
 
     /// <param name="placeholderAt">When set, the feed holds only <see cref="NewznabPlaceholder"/>, dated this time.</param>
-    public static byte[] Feed(IEnumerable<HitEntity> hits, string baseUrl, string? apiKey, int offset, DateTimeOffset? placeholderAt = null)
+    public static byte[] Feed(
+        IEnumerable<HitEntity> hits, ProfileRegistry registry, IMediaProfile? placeholderProfile, string baseUrl, string? apiKey, int offset, DateTimeOffset? placeholderAt = null)
     {
         var channel = new XElement("channel",
             new XElement("title", "Slskarr"),
@@ -38,23 +47,23 @@ internal static class NewznabXml
             new XElement(Attr + "response", new XAttribute("offset", offset)));
         foreach (var hit in hits)
         {
-            channel.Add(Item(hit, baseUrl, apiKey));
+            channel.Add(Item(hit, registry.ByName(hit.Profile) ?? registry.All[0], baseUrl, apiKey));
         }
 
         if (placeholderAt is { } at)
         {
             channel.Add(Item(new HitEntity
             {
-                Id = NewznabPlaceholder.Id, SearchKey = "", Profile = "", Username = "", RemotePath = "",
+                Id = NewznabPlaceholder.Id, SearchKey = "", Profile = placeholderProfile?.Name ?? "", Username = "", RemotePath = "",
                 ReleaseTitle = NewznabPlaceholder.Title, Size = NewznabPlaceholder.Size, Format = "", SeenAt = at,
-            }, baseUrl, apiKey));
+            }, placeholderProfile ?? registry.All[0], baseUrl, apiKey));
         }
 
         return StubNzb.Serialize(new XDocument(new XDeclaration("1.0", "utf-8", null),
             new XElement("rss", new XAttribute("version", "2.0"), new XAttribute(XNamespace.Xmlns + "newznab", Attr.NamespaceName), channel)));
     }
 
-    private static XElement Item(HitEntity hit, string baseUrl, string? apiKey)
+    private static XElement Item(HitEntity hit, IMediaProfile profile, string baseUrl, string? apiKey)
     {
         var url = $"{baseUrl}/newznab/api?t=get&id={Uri.EscapeDataString(hit.Id)}"
             + (string.IsNullOrWhiteSpace(apiKey) ? "" : $"&apikey={Uri.EscapeDataString(apiKey)}");
@@ -67,17 +76,11 @@ internal static class NewznabXml
             new XElement("pubDate", hit.SeenAt.UtcDateTime.ToString("R", CultureInfo.InvariantCulture)),
             new XElement("size", size),
             new XElement("enclosure", new XAttribute("url", url), new XAttribute("length", size), new XAttribute("type", "application/x-nzb")),
-            Attribute("category", "7000"),
-            Attribute("category", "7020"),
+            profile.ItemCategories(hit).Select(c => Attribute("category", c.ToString(CultureInfo.InvariantCulture))),
             Attribute("size", size));
-        if (!string.IsNullOrWhiteSpace(hit.ParsedAuthor))
+        foreach (var (name, value) in profile.ItemAttributes(hit))
         {
-            item.Add(Attribute("author", XmlText.Clean(hit.ParsedAuthor)));
-        }
-
-        if (!string.IsNullOrWhiteSpace(hit.ParsedTitle))
-        {
-            item.Add(Attribute("booktitle", XmlText.Clean(hit.ParsedTitle)));
+            item.Add(Attribute(name, XmlText.Clean(value)));
         }
 
         return item;
