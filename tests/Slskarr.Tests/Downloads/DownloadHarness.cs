@@ -228,6 +228,9 @@ public sealed class FakeDownloadSlskd : ISlskdClient
 
     public bool PlaceThrows { get; set; }
 
+    /// <summary>Transfer ids asked for through <see cref="GetPlaceInQueueAsync"/>, in call order.</summary>
+    public List<Guid> PlaceCalls { get; } = [];
+
     public int? Place { get; set; }
 
     /// <summary>Per-call queue position, when set (overrides <see cref="Place"/>).</summary>
@@ -340,6 +343,7 @@ public sealed class FakeDownloadSlskd : ISlskdClient
             throw new SlskdUnavailableException("down");
         }
 
+        PlaceCalls.Add(transferId);
         return Task.FromResult(PlaceFor is { } f ? f(username, transferId) : Place);
     }
 

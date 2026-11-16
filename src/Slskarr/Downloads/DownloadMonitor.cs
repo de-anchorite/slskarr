@@ -147,6 +147,7 @@ public sealed class DownloadMonitor(
         string? failure = null;
         var gone = new List<JobFileEntity>();
         var finished = new List<JobFileEntity>(); // failed in slskd already: nothing left to cancel
+        var queued = new List<(JobFileEntity File, SlskdTransfer Transfer)>();
         foreach (var file in job.Files)
         {
             var transfer = transfers[file];
@@ -176,16 +177,29 @@ public sealed class DownloadMonitor(
             }
             else if (SlskdStates.IsQueued(transfer.State))
             {
-                int? place;
-                try
+                queued.Add((file, transfer));
+            }
+        }
+
+        // One queue-position request per batch per poll (the first queued file by remote path): a peer request
+        // per track would be 12 per album every poll. The others keep their last known position.
+        foreach (var batch in queued.GroupBy(q => q.File.BatchId))
+        {
+            var asked = batch.MinBy(q => q.File.RemotePath, StringComparer.Ordinal);
+            foreach (var (file, transfer) in batch)
+            {
+                var place = file.PlaceInQueue;
+                if (file == asked.File)
                 {
-                    place = await slskd.GetPlaceInQueueAsync(job.Username, transfer.Id, ct);
-                }
-                catch (SlskdUnavailableException)
-                {
-                    // slskd answered the batch call, so this is the peer being unreachable: position
-                    // unknown, no progress, and the stall clock keeps running.
-                    place = file.PlaceInQueue;
+                    try
+                    {
+                        place = await slskd.GetPlaceInQueueAsync(job.Username, transfer.Id, ct);
+                    }
+                    catch (SlskdUnavailableException)
+                    {
+                        // slskd answered the batch call, so this is the peer being unreachable: position
+                        // unknown, no progress, and the stall clock keeps running.
+                    }
                 }
 
                 Mirror(job, file, DownloadState.Queued, transfer.BytesTransferred, place, now);

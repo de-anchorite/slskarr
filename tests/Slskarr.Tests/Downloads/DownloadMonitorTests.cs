@@ -410,12 +410,12 @@ public sealed class DownloadMonitorTests : IDisposable
     }
 
     [Fact]
-    public async Task Queue_position_is_minimum_over_queued_tracks()
+    public async Task Queue_position_is_minimum_over_batches()
     {
-        var id = _h.AddAlbum("01.flac", "02.flac", "03.flac");
+        var id = _h.AddAlbum("01.flac", "02.flac", "03.flac", "d2/01.flac", "d2/02.flac");
         _h.SetAlbumFile("01.flac", "InProgress", 10);
-        var places = new Queue<int?>([7, 3]);
-        _h.Slskd.PlaceFor = (_, _) => places.Dequeue();
+        var d2 = TransferOf(id, "d2/01.flac");
+        _h.Slskd.PlaceFor = (_, t) => t == d2 ? 3 : 7;
 
         await _h.Poll();
 
@@ -423,6 +423,46 @@ public sealed class DownloadMonitorTests : IDisposable
         after.State.ShouldBe(DownloadState.Downloading);
         after.PlaceInQueue.ShouldBe(3);
         after.Files.Where(f => f.State == DownloadState.Downloading).ShouldAllBe(f => f.PlaceInQueue == null);
+    }
+
+    private Guid TransferOf(Guid job, string name) =>
+        _h.Job(job).Files.Single(f => f.RemotePath == DownloadHarness.AlbumPath(name)).SlskdTransferId!.Value;
+
+    // A 12-track album must not cost 12 peer requests every poll: one queued file per batch is asked.
+    [Fact]
+    public async Task Queued_album_asks_one_queue_position_per_batch_per_poll()
+    {
+        var names = Enumerable.Range(1, 6).SelectMany(i => new[] { $"{i:00}.flac", $"d2/{i:00}.flac" }).ToArray();
+        var id = _h.AddAlbum(names);
+        _h.Slskd.Place = 5;
+
+        await _h.Poll();
+        _h.Slskd.PlaceCalls.ShouldBe([TransferOf(id, "01.flac"), TransferOf(id, "d2/01.flac")], ignoreOrder: true);
+        _h.Job(id).PlaceInQueue.ShouldBe(5);
+
+        _h.Slskd.PlaceCalls.Clear();
+        _h.SetAlbumFile("01.flac", "InProgress", 10);
+        await _h.Poll();
+        _h.Slskd.PlaceCalls.ShouldBe([TransferOf(id, "02.flac"), TransferOf(id, "d2/01.flac")], ignoreOrder: true);
+    }
+
+    [Fact]
+    public async Task Queued_album_position_change_resets_stall_clock()
+    {
+        var id = _h.AddAlbum([.. Enumerable.Range(1, 12).Select(i => $"{i:00}.flac")]);
+        _h.Slskd.Place = 5;
+        await _h.Poll();
+
+        _h.Time.Advance(TimeSpan.FromMinutes(59));
+        _h.Slskd.Place = 4;
+        await _h.Poll();
+        _h.Job(id).PlaceInQueue.ShouldBe(4);
+
+        _h.Time.Advance(TimeSpan.FromMinutes(6));
+        await _h.Poll();
+        _h.Job(id).State.ShouldBe(DownloadState.Queued);
+        _h.Slskd.Cancels.ShouldBeEmpty();
+        _h.Slskd.PlaceCalls.Count.ShouldBe(3);
     }
 
     [Fact]
