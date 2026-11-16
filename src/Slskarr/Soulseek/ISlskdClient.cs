@@ -16,7 +16,7 @@ public interface ISlskdClient
     Task DeleteSearchAsync(Guid id, CancellationToken ct);
 
     Task<SlskdEnqueueResult> EnqueueBatchAsync(
-        Guid batchId, string username, string remotePath, long size, string destination, CancellationToken ct);
+        Guid batchId, string username, IReadOnlyList<SlskdEnqueueFile> files, string destination, CancellationToken ct);
 
     /// <summary>Returns null when slskd has no such batch.</summary>
     Task<SlskdBatch?> GetBatchAsync(Guid batchId, CancellationToken ct);

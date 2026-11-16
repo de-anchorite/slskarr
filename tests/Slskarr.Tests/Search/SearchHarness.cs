@@ -235,7 +235,7 @@ public sealed class FakeSearchSlskd(TimeProvider time) : ISlskdClient
         return Task.CompletedTask;
     }
 
-    public Task<SlskdEnqueueResult> EnqueueBatchAsync(Guid batchId, string username, string remotePath, long size, string destination, CancellationToken ct) =>
+    public Task<SlskdEnqueueResult> EnqueueBatchAsync(Guid batchId, string username, IReadOnlyList<SlskdEnqueueFile> files, string destination, CancellationToken ct) =>
         throw new NotSupportedException();
 
     public Task<SlskdBatch?> GetBatchAsync(Guid batchId, CancellationToken ct) => throw new NotSupportedException();

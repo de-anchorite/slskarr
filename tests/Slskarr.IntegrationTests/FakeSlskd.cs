@@ -23,6 +23,9 @@ namespace Slskarr.IntegrationTests;
 /// </remarks>
 public sealed class FakeSlskd : IDisposable
 {
+    public sealed record FakeFile(
+        string Filename, long Size, int? BitRate = null, int? BitDepth = null, int? SampleRate = null, int? Length = null, bool? IsVbr = null);
+
     public sealed record RecordedRequest(string Method, string Path, string Query, string Body);
 
     /// <summary>From <see cref="At"/> after the enqueue (fake time), the transfer reports this state.</summary>
@@ -99,11 +102,24 @@ public sealed class FakeSlskd : IDisposable
     public HttpMessageHandler CreateHandler() => _app.GetTestServer().CreateHandler();
 
     /// <summary>A peer sharing <paramref name="files"/>; it answers searches whose words all appear in a file's path.</summary>
-    public void AddPeer(string username, IEnumerable<(string Filename, long Size)> files, bool freeSlot, int queueLength, int speed)
+    public void AddPeer(string username, IEnumerable<(string Filename, long Size)> files, bool freeSlot, int queueLength, int speed) =>
+        AddPeer(username, files.Select(f => new FakeFile(f.Filename, f.Size)), freeSlot, queueLength, speed);
+
+    /// <summary>A peer sharing <paramref name="files"/> with audio attributes.</summary>
+    public void AddPeer(string username, IEnumerable<FakeFile> files, bool freeSlot, int queueLength, int speed)
     {
         lock (_lock)
         {
             _peers[username] = new Peer([.. files], freeSlot, queueLength, speed) { Online = true };
+        }
+    }
+
+    /// <summary>The destination folder (relative to slskd's downloads) the given batch was enqueued with.</summary>
+    public string DestinationOf(Guid batchId)
+    {
+        lock (_lock)
+        {
+            return _batches[batchId].Destination;
         }
     }
 
@@ -378,7 +394,7 @@ public sealed class FakeSlskd : IDisposable
         };
     }
 
-    private List<(string Username, Peer Peer, List<(string Filename, long Size)> Files)> Responses(string text)
+    private List<(string Username, Peer Peer, List<FakeFile> Files)> Responses(string text)
     {
         var words = text.Split(' ', StringSplitOptions.RemoveEmptyEntries);
         return
@@ -392,14 +408,24 @@ public sealed class FakeSlskd : IDisposable
         ];
     }
 
-    private static object ResponseJson((string Username, Peer Peer, List<(string Filename, long Size)> Files) r) => new
+    private static object ResponseJson((string Username, Peer Peer, List<FakeFile> Files) r) => new
     {
         username = r.Username,
         hasFreeUploadSlot = r.Peer.FreeSlot,
         queueLength = r.Peer.QueueLength,
         uploadSpeed = r.Peer.Speed,
         fileCount = r.Files.Count,
-        files = r.Files.Select(f => new { filename = f.Filename, size = f.Size, extension = "" }).ToArray(),
+        files = r.Files.Select(f => new
+        {
+            filename = f.Filename,
+            size = f.Size,
+            extension = "",
+            bitRate = f.BitRate,
+            bitDepth = f.BitDepth,
+            sampleRate = f.SampleRate,
+            length = f.Length,
+            isVariableBitRate = f.IsVbr,
+        }).ToArray(),
         lockedFileCount = 0,
         lockedFiles = Array.Empty<object>(),
     };
@@ -448,7 +474,7 @@ public sealed class FakeSlskd : IDisposable
 
     private sealed record Batch(Guid Id, string Username, string Destination, IReadOnlyList<Transfer> Transfers);
 
-    private sealed record Peer(List<(string Filename, long Size)> Files, bool FreeSlot, int QueueLength, int Speed)
+    private sealed record Peer(List<FakeFile> Files, bool FreeSlot, int QueueLength, int Speed)
     {
         public bool Online { get; set; }
     }

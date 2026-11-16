@@ -166,9 +166,9 @@ public sealed class FakeDownloadSlskd : ISlskdClient
         ]);
 
     public async Task<SlskdEnqueueResult> EnqueueBatchAsync(
-        Guid batchId, string username, string remotePath, long size, string destination, CancellationToken ct)
+        Guid batchId, string username, IReadOnlyList<SlskdEnqueueFile> files, string destination, CancellationToken ct)
     {
-        Enqueues.Add(new EnqueueCall(batchId, username, remotePath, size, destination));
+        Enqueues.Add(new EnqueueCall(batchId, username, files[0].Filename, files[0].Size, destination));
         if (BatchBeforeFailure is { } transfers)
         {
             Batches[batchId] = transfers == 0 ? new SlskdBatch(batchId, "peer", []) : Batch(batchId, Guid.NewGuid(), "Queued, Remotely", 0);

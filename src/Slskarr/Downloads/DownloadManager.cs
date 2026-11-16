@@ -225,7 +225,7 @@ public sealed class DownloadManager(
             try
             {
                 result = await slskd.EnqueueBatchAsync(
-                    job.BatchId, job.Username, job.RemotePath, job.Size, StoragePaths.JobDir(job.Id), timeout.Token);
+                    job.BatchId, job.Username, [new SlskdEnqueueFile(job.RemotePath, job.Size)], StoragePaths.JobDir(job.Id), timeout.Token);
             }
             catch (Exception ex) when (ex is SlskdUnavailableException
                 || (ex is OperationCanceledException && timeout.IsCancellationRequested))

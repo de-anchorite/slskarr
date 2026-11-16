@@ -168,7 +168,7 @@ public sealed class SlskdClientTests : IDisposable
         Stub("POST", "/api/v0/transfers/downloads/batches", 201,
             $$"""{"batch":{"id":"{{batchId}}","username":"bob","transfers":[{"id":"{{Guid.NewGuid()}}","batchId":"{{batchId}}","username":"bob","filename":"x","size":9,"state":"Requested","bytesTransferred":0,"averageSpeed":0}]},"failures":[]}""");
 
-        var result = await Client().EnqueueBatchAsync(batchId, "bob", Remote, 9, Dest, default);
+        var result = await Client().EnqueueBatchAsync(batchId, "bob", [new SlskdEnqueueFile(Remote, 9)], Dest, default);
 
         result.Ok.ShouldBeTrue();
         result.Batch!.Transfers.Single().State.ShouldBe("Requested");
@@ -182,6 +182,45 @@ public sealed class SlskdClientTests : IDisposable
         body["options"]!["destination"]!.GetValue<string>().ShouldBe(Dest);
     }
 
+    [Fact]
+    public async Task Search_response_files_carry_audio_attributes()
+    {
+        var id = Guid.NewGuid();
+        Stub("GET", $"/api/v0/searches/{id}", 200,
+            """{"id":"%ID%","state":"Completed, TimedOut","isComplete":true,"responseCount":1,"responses":[{"username":"bob","hasFreeUploadSlot":true,"queueLength":2,"uploadSpeed":100,"files":[{"filename":"a\\b\\01.flac","size":1,"bitRate":900,"bitDepth":24,"sampleRate":96000,"length":245,"isVariableBitRate":false}]}]}"""
+                .Replace("%ID%", id.ToString()));
+
+        var search = await Client().GetSearchAsync(id, true, default);
+
+        var file = search.ShouldNotBeNull().Responses.ShouldNotBeNull().Single().Files.Single();
+        file.BitRate.ShouldBe(900);
+        file.BitDepth.ShouldBe(24);
+        file.SampleRate.ShouldBe(96000);
+        file.Length.ShouldBe(245);
+        file.IsVariableBitRate.ShouldBe(false);
+    }
+
+    [Fact]
+    public async Task Enqueue_batch_sends_all_files()
+    {
+        var batchId = Guid.NewGuid();
+        Stub("POST", "/api/v0/transfers/downloads/batches", 201,
+            $$"""{"batch":{"id":"{{batchId}}","username":"bob","transfers":[]},"failures":[]}""");
+
+        var result = await Client().EnqueueBatchAsync(
+            batchId, "bob", [new SlskdEnqueueFile(@"a\01.flac", 11), new SlskdEnqueueFile(@"a\02.flac", 22)], Dest, default);
+
+        result.Ok.ShouldBeTrue();
+        var body = JsonNode.Parse(Only().RequestMessage!.Body!)!;
+        var files = body["files"]!.AsArray();
+        files.Count.ShouldBe(2);
+        files[0]!["filename"]!.GetValue<string>().ShouldBe(@"a\01.flac");
+        files[0]!["size"]!.GetValue<long>().ShouldBe(11);
+        files[1]!["filename"]!.GetValue<string>().ShouldBe(@"a\02.flac");
+        files[1]!["size"]!.GetValue<long>().ShouldBe(22);
+        body["options"]!["destination"]!.GetValue<string>().ShouldBe(Dest);
+    }
+
     [Theory]
     [InlineData(207)]
     [InlineData(200)]
@@ -190,7 +229,7 @@ public sealed class SlskdClientTests : IDisposable
         Stub("POST", "/api/v0/transfers/downloads/batches", status,
             """{"batch":null,"failures":[{"filename":"x","message":"already in progress"}]}""");
 
-        var result = await Client().EnqueueBatchAsync(Guid.NewGuid(), "bob", Remote, 9, Dest, default);
+        var result = await Client().EnqueueBatchAsync(Guid.NewGuid(), "bob", [new SlskdEnqueueFile(Remote, 9)], Dest, default);
 
         result.Ok.ShouldBeFalse();
         result.Error.ShouldBe("already in progress");
@@ -203,7 +242,7 @@ public sealed class SlskdClientTests : IDisposable
             HttpStatusCode.TooManyRequests, HttpStatusCode.TooManyRequests, HttpStatusCode.Created);
         var client = new SlskdClient(new HttpClient(handler) { BaseAddress = new Uri("http://slskd.test/") }, _time);
 
-        var result = await client.EnqueueBatchAsync(Guid.NewGuid(), "bob", Remote, 9, Dest, default);
+        var result = await client.EnqueueBatchAsync(Guid.NewGuid(), "bob", [new SlskdEnqueueFile(Remote, 9)], Dest, default);
 
         result.Ok.ShouldBeTrue();
         handler.Calls.ShouldBe(3);
@@ -216,7 +255,7 @@ public sealed class SlskdClientTests : IDisposable
         var handler = new SequenceHandler(HttpStatusCode.TooManyRequests);
         var client = new SlskdClient(new HttpClient(handler) { BaseAddress = new Uri("http://slskd.test/") }, _time);
 
-        var result = await client.EnqueueBatchAsync(Guid.NewGuid(), "bob", Remote, 9, Dest, default);
+        var result = await client.EnqueueBatchAsync(Guid.NewGuid(), "bob", [new SlskdEnqueueFile(Remote, 9)], Dest, default);
 
         result.Ok.ShouldBeFalse();
         handler.Calls.ShouldBe(4);
@@ -227,7 +266,7 @@ public sealed class SlskdClientTests : IDisposable
     public async Task EnqueueBatch_404_is_peer_offline()
     {
         Stub("POST", "/api/v0/transfers/downloads/batches", 404, "\"User bob appears to be offline\"");
-        var result = await Client().EnqueueBatchAsync(Guid.NewGuid(), "bob", Remote, 9, Dest, default);
+        var result = await Client().EnqueueBatchAsync(Guid.NewGuid(), "bob", [new SlskdEnqueueFile(Remote, 9)], Dest, default);
         result.ShouldBe(new SlskdEnqueueResult(false, null, "peer offline"));
     }
 
@@ -236,7 +275,7 @@ public sealed class SlskdClientTests : IDisposable
     {
         Stub("POST", "/api/v0/transfers/downloads/batches", 500, "  Failed to connect to peer bob: connection refused \n");
 
-        var result = await Client().EnqueueBatchAsync(Guid.NewGuid(), "bob", Remote, 9, Dest, default);
+        var result = await Client().EnqueueBatchAsync(Guid.NewGuid(), "bob", [new SlskdEnqueueFile(Remote, 9)], Dest, default);
 
         result.Ok.ShouldBeFalse();
         result.Batch.ShouldBeNull();
@@ -248,7 +287,7 @@ public sealed class SlskdClientTests : IDisposable
     {
         Stub("POST", "/api/v0/transfers/downloads/batches", 500, new string('x', 1000));
 
-        var result = await Client().EnqueueBatchAsync(Guid.NewGuid(), "bob", Remote, 9, Dest, default);
+        var result = await Client().EnqueueBatchAsync(Guid.NewGuid(), "bob", [new SlskdEnqueueFile(Remote, 9)], Dest, default);
 
         result.Ok.ShouldBeFalse();
         result.Error!.Length.ShouldBeLessThanOrEqualTo(240);
@@ -264,7 +303,7 @@ public sealed class SlskdClientTests : IDisposable
         Stub("POST", "/api/v0/transfers/downloads/batches", status, "proxy says no");
 
         await Should.ThrowAsync<SlskdUnavailableException>(
-            () => Client().EnqueueBatchAsync(Guid.NewGuid(), "bob", Remote, 9, Dest, default));
+            () => Client().EnqueueBatchAsync(Guid.NewGuid(), "bob", [new SlskdEnqueueFile(Remote, 9)], Dest, default));
     }
 
     [Fact]
