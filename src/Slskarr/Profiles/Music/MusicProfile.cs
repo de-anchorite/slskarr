@@ -93,18 +93,19 @@ public sealed partial class MusicProfile(IOptions<SlskarrOptions> options) : IMe
     private static string Clean(string raw) => WhitespaceRegex().Replace(PunctuationRegex().Replace(raw, " "), " ").Trim();
 
     /// <summary>
-    /// Lidarr's tier 2 for a self-titled album is <c>q=W W yyyy</c> (artist, album, year) while tier 1 sends
-    /// <c>artist=W&amp;album=W</c> and the year separately (ignored). Collapsing to <c>W</c> keeps one search key.
+    /// Lidarr's tier 2 for a self-titled album is <c>q=W W yyyy</c> (artist, album, year; <c>0</c> when the year
+    /// is unknown) while tier 1 sends <c>artist=W&amp;album=W</c> and the year separately (ignored). Collapsing to
+    /// <c>W</c> keeps one search key. The trailing year is required: a bare <c>Duran Duran</c> is a name, not a tier 2.
     /// </summary>
     private static string CollapseSelfTitled(string q)
     {
         var words = q.Split(' ', StringSplitOptions.RemoveEmptyEntries);
-        var n = words.Length;
-        if (n >= 3 && words[^1].Length == 4 && words[^1].All(char.IsAsciiDigit))
+        if (words.Length < 3 || !IsLidarrYear(words[^1]))
         {
-            n--;
+            return q;
         }
-        if (n < 2 || n % 2 != 0)
+        var n = words.Length - 1;
+        if (n % 2 != 0)
         {
             return q;
         }
@@ -118,6 +119,8 @@ public sealed partial class MusicProfile(IOptions<SlskarrOptions> options) : IMe
         }
         return string.Join(' ', words[..half]);
     }
+
+    private static bool IsLidarrYear(string w) => w == "0" || (w.Length == 4 && w.All(char.IsAsciiDigit));
 
     // Lidarr sends "Various Artists" as "VA" in both tiers (artist=VA&album=X, then q=VA X); the artist is
     // dropped from the query, so tier 2 must drop it too for the two tiers to share one search key.
