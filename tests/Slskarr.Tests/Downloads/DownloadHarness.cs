@@ -6,6 +6,9 @@ using Microsoft.Extensions.Time.Testing;
 using Slskarr.Configuration;
 using Slskarr.Data;
 using Slskarr.Downloads;
+using Slskarr.Profiles;
+using Slskarr.Profiles.Ebook;
+using Slskarr.Search;
 using Slskarr.Soulseek;
 
 namespace Slskarr.Tests.Downloads;
@@ -42,8 +45,13 @@ public sealed class DownloadHarness : IDisposable
         Slskd = new FakeDownloadSlskd();
         Status = new FileManagementStatus();
         Manager = new DownloadManager(Db, Slskd, Time, Status, NullLogger<DownloadManager>.Instance);
-        Monitor = new DownloadMonitor(Db, Slskd, Options, Time, NullLogger<DownloadMonitor>.Instance);
+        Monitor = new DownloadMonitor(Db, Slskd, Options, Registry, Time, NullLogger<DownloadMonitor>.Instance);
     }
+
+    public const string MusicCategory = "music";
+
+    /// <summary>Ebook profile plus a stub whose releases are folders, as music's will be.</summary>
+    public ProfileRegistry Registry => new([new EbookProfile(Options, new EbookNameParser()), new FolderProfile()]);
 
     public FakeTimeProvider Time { get; } = new(Start);
 
@@ -61,7 +69,7 @@ public sealed class DownloadHarness : IDisposable
 
     /// <summary>Simulates a process restart for the monitor: a new instance, constructed at the current fake time.</summary>
     public void RestartMonitor() =>
-        Monitor = new DownloadMonitor(Db, Slskd, Options, Time, NullLogger<DownloadMonitor>.Instance);
+        Monitor = new DownloadMonitor(Db, Slskd, Options, Registry, Time, NullLogger<DownloadMonitor>.Instance);
 
     public const string IncompleteFile = "peer/Books/Frank Herbert/Frank Herbert - Dune (1965).epub";
 
@@ -96,6 +104,84 @@ public sealed class DownloadHarness : IDisposable
         using var db = Db.CreateDbContext();
         change(db.DownloadJobs.Include(j => j.Files).Single(j => j.Id == id));
         db.SaveChanges();
+    }
+
+    /// <summary>
+    /// Stores an active music job (an album) with one file per name; names starting with "d2/" go to disc 2.
+    /// The fake slskd gets one batch per subdir with one queued transfer per file.
+    /// </summary>
+    public Guid AddAlbum(params string[] names)
+    {
+        var id = Guid.NewGuid();
+        var batches = new Dictionary<string, Guid>();
+        var files = new List<JobFileEntity>();
+        foreach (var name in names)
+        {
+            var subdir = name.Contains('/') ? name[..name.IndexOf('/')] : "";
+            var batch = batches.TryGetValue(subdir, out var b) ? b : batches[subdir] = Guid.NewGuid();
+            files.Add(new JobFileEntity
+            {
+                JobId = id,
+                RemotePath = AlbumPath(name),
+                Size = FileSize,
+                Subdir = subdir,
+                BatchId = batch,
+                State = DownloadState.Queued,
+            });
+        }
+
+        using (var db = Db.CreateDbContext())
+        {
+            db.DownloadJobs.Add(new DownloadJobEntity
+            {
+                Id = id,
+                HitId = HitId,
+                Category = MusicCategory,
+                Title = "Artist - Album",
+                Username = "peer",
+                RemotePath = @"@@abcde\Music\Artist\Album",
+                Size = FileSize * names.Length,
+                State = DownloadState.Queued,
+                LastProgressAt = Time.GetUtcNow(),
+                CreatedAt = Time.GetUtcNow(),
+                Files = files,
+            });
+            db.SaveChanges();
+        }
+
+        foreach (var group in files.GroupBy(f => f.BatchId))
+        {
+            Slskd.Batches[group.Key] = new SlskdBatch(group.Key, "peer",
+                [.. group.Select(f => new SlskdTransfer(Guid.NewGuid(), group.Key, "peer", f.RemotePath, f.Size, "Queued, Remotely", 0, 0, null, null))]);
+        }
+
+        // Transfer ids are recorded as the manager does after a successful enqueue.
+        UpdateJob(id, j =>
+        {
+            foreach (var f in j.Files)
+            {
+                f.SlskdTransferId = Slskd.Batches[f.BatchId].Transfers.Single(t => t.Filename == f.RemotePath).Id;
+            }
+        });
+        return id;
+    }
+
+    public static string AlbumPath(string name) => @"@@abcde\Music\Artist\Album\" + name.Replace('/', '\\');
+
+    /// <summary>Sets the state of the transfer of one album file.</summary>
+    public void SetAlbumFile(string name, string state, long bytes = 0)
+    {
+        var path = AlbumPath(name);
+        foreach (var (batchId, batch) in Slskd.Batches.ToList())
+        {
+            if (batch.Transfers.FirstOrDefault(t => t.Filename == path) is { } t)
+            {
+                Slskd.Batches[batchId] = batch with
+                {
+                    Transfers = [.. batch.Transfers.Select(x => x == t ? t with { State = state, BytesTransferred = bytes } : x)],
+                };
+            }
+        }
     }
 
     public Task Poll() => Monitor.PollOnceAsync(CancellationToken.None);
@@ -139,6 +225,9 @@ public sealed class FakeDownloadSlskd : ISlskdClient
     public bool PlaceThrows { get; set; }
 
     public int? Place { get; set; }
+
+    /// <summary>Per-call queue position, when set (overrides <see cref="Place"/>).</summary>
+    public Func<string, Guid, int?>? PlaceFor { get; set; }
 
     public string? EnqueueError { get; set; }
 
@@ -246,7 +335,7 @@ public sealed class FakeDownloadSlskd : ISlskdClient
             throw new SlskdUnavailableException("down");
         }
 
-        return Task.FromResult(Place);
+        return Task.FromResult(PlaceFor is { } f ? f(username, transferId) : Place);
     }
 
     public Task CancelDownloadAsync(string username, Guid transferId, bool remove, CancellationToken ct)
@@ -286,4 +375,18 @@ public sealed class FakeDownloadSlskd : ISlskdClient
     public Task DeleteSearchAsync(Guid id, CancellationToken ct) => throw new NotSupportedException();
 
     public Task<string> GetVersionAsync(CancellationToken ct) => throw new NotSupportedException();
+}
+
+/// <summary>Minimal profile whose finished release is a folder.</summary>
+internal sealed class FolderProfile : IMediaProfile
+{
+    public string Name => "folder";
+    public IReadOnlyList<int> Categories => [3000];
+    public string SabCategory => DownloadHarness.MusicCategory;
+    public bool StorageIsFolder => true;
+    public IReadOnlyList<string> Ranking => [];
+    public bool Handles(SearchRequest r) => false;
+    public string BuildQuery(SearchRequest r) => "";
+    public IReadOnlyList<ReleaseCandidate> ToCandidates(IEnumerable<SlskdSearchResponse> responses) => [];
+    public int FormatRank(string format) => 0;
 }
