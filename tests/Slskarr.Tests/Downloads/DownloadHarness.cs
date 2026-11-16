@@ -77,6 +77,7 @@ public sealed class DownloadHarness : IDisposable
         Size = FileSize,
         ReleaseTitle = "Frank Herbert - Dune (1965)",
         Format = "EPUB",
+        SeenAt = Start, // not year 1: the search worker's retention prune would delete it mid-test
         Files = [new HitFileEntity { HitId = id, RemotePath = RemotePath, Size = FileSize }],
     };
 

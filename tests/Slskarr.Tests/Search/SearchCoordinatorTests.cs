@@ -310,6 +310,22 @@ public sealed class SearchCoordinatorTests : IDisposable
         _h.Hits().Select(h => h.Id).ShouldBe(["downloading", "fresh"], ignoreOrder: true);
     }
 
+    // Root cause of a flaky SABnzbd test: hits seeded by the download helpers had SeenAt = year 1, so the
+    // factory's worker could prune them mid-test.
+    [Fact]
+    public async Task Download_harness_hits_survive_the_first_retention_prune()
+    {
+        await using (var db = await _h.Db.CreateDbContextAsync())
+        {
+            db.Hits.Add(Slskarr.Tests.Downloads.DownloadHarness.NewHit("seeded"));
+            await db.SaveChangesAsync();
+        }
+
+        (await _h.Worker.RunOnceAsync(CancellationToken.None)).ShouldBeFalse();
+
+        _h.Hits().Select(h => h.Id).ShouldBe(["seeded"]);
+    }
+
     [Fact]
     public async Task Retention_prunes_old_finished_search_jobs()
     {
