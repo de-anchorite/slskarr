@@ -140,7 +140,7 @@ namespace Slskarr.Data.Migrations
 
                     b.HasIndex("SeenAt");
 
-                    b.HasIndex("SearchKey", "Username", "RemotePath")
+                    b.HasIndex("SearchKey", "Username", "RemotePath", "Format")
                         .IsUnique();
 
                     b.ToTable("Hits");

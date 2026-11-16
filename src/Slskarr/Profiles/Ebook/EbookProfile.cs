@@ -60,7 +60,8 @@ public sealed partial class EbookProfile(IOptions<SlskarrOptions> options, Ebook
                 var name = parser.Parse(file.Filename);
                 result.Add(new ReleaseCandidate(
                     this.Name, response.Username, file.Filename, file.Size, name, ReleaseTitle(name),
-                    response.HasFreeUploadSlot, response.QueueLength, response.UploadSpeed));
+                    response.HasFreeUploadSlot, response.QueueLength, response.UploadSpeed,
+                    [new CandidateFile(file.Filename, file.Size, "", file.BitRate, file.BitDepth, file.SampleRate, file.Length, file.IsVariableBitRate)]));
             }
         }
         return result;

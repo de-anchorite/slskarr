@@ -3,6 +3,18 @@ using Slskarr.Soulseek;
 
 namespace Slskarr.Profiles;
 
+/// <summary>One file of a release; <c>Subdir</c> is the disc/sub-folder below the release folder ("" for none).</summary>
+public sealed record CandidateFile(
+    string RemotePath,
+    long Size,
+    string Subdir,
+    int? BitRate,
+    int? BitDepth,
+    int? SampleRate,
+    int? Length,
+    bool? IsVbr);
+
+/// <summary>A downloadable release. <c>Size</c> is the sum of <c>Files</c>.</summary>
 public sealed record ReleaseCandidate(
     string Profile,
     string Username,
@@ -12,7 +24,8 @@ public sealed record ReleaseCandidate(
     string ReleaseTitle,
     bool FreeSlot,
     int QueueLength,
-    int UploadSpeed);
+    int UploadSpeed,
+    IReadOnlyList<CandidateFile> Files);
 
 /// <summary>A media type Slskarr can search for and download (v1: ebooks).</summary>
 public interface IMediaProfile

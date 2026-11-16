@@ -25,7 +25,7 @@ public class RankerTests
 
     private static ReleaseCandidate Hit(string user, string author, string title, bool free, int queue, int speed, string format = "EPUB") =>
         new("ebook", user, $"\\{author}\\{title}.{format.ToLowerInvariant()}", 1000,
-            new ParsedName(author, title, null, format, $"{author} - {title}"), $"{author} - {title}", free, queue, speed);
+            new ParsedName(author, title, null, format, $"{author} - {title}"), $"{author} - {title}", free, queue, speed, []);
 
     [Fact]
     public void Default_order_puts_name_match_first()

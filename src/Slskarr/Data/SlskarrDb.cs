@@ -29,7 +29,7 @@ public sealed class SlskarrDb(DbContextOptions<SlskarrDb> options) : DbContext(o
         modelBuilder.Entity<HitEntity>(e =>
         {
             e.HasKey(h => h.Id);
-            e.HasIndex(h => new { h.SearchKey, h.Username, h.RemotePath }).IsUnique();
+            e.HasIndex(h => new { h.SearchKey, h.Username, h.RemotePath, h.Format }).IsUnique();
             e.HasIndex(h => h.SeenAt);
             e.HasMany(h => h.Files).WithOne().HasForeignKey(f => f.HitId).OnDelete(DeleteBehavior.Cascade);
         });
