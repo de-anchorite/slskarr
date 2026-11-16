@@ -14,7 +14,11 @@ public class SearchWorkerTests
         public string Name => "stub";
         public IReadOnlyList<int> Categories => [1];
         public string SabCategory => "stub";
-        public bool StorageIsFolder => false;
+        public bool CoalesceBySuperset => false;
+    public NewznabCategory CapsCategory => new(1, "Stub", []);
+    public IReadOnlyList<int> ItemCategories(HitEntity hit) => [];
+    public IReadOnlyList<(string Name, string Value)> ItemAttributes(HitEntity hit) => [];
+    public bool StorageIsFolder => false;
         public IReadOnlyList<string> Ranking => [];
         public bool Handles(SearchRequest r) => true;
         public string BuildQuery(SearchRequest r) => r.Query ?? "x";

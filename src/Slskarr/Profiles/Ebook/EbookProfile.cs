@@ -1,6 +1,7 @@
 using System.Text.RegularExpressions;
 using Microsoft.Extensions.Options;
 using Slskarr.Configuration;
+using Slskarr.Data;
 using Slskarr.Search;
 using Slskarr.Soulseek;
 
@@ -26,8 +27,32 @@ public sealed partial class EbookProfile(IOptions<SlskarrOptions> options, Ebook
     [GeneratedRegex(@"\s+", RegexOptions.CultureInvariant)]
     private static partial Regex WhitespaceRegex();
 
-    public bool Handles(SearchRequest r) =>
-        r.Categories.Count == 0 || r.Categories.Any(c => c is >= 7000 and < 8000);
+    public bool CoalesceBySuperset => true;
+
+    public NewznabCategory CapsCategory { get; } = new(7000, "Books", [(7020, "Books/EBook")]);
+
+    public IReadOnlyList<int> ItemCategories(HitEntity hit) => [7000, 7020];
+
+    public IReadOnlyList<(string Name, string Value)> ItemAttributes(HitEntity hit)
+    {
+        var attrs = new List<(string, string)>();
+        if (!string.IsNullOrWhiteSpace(hit.ParsedAuthor))
+        {
+            attrs.Add(("author", hit.ParsedAuthor));
+        }
+        if (!string.IsNullOrWhiteSpace(hit.ParsedTitle))
+        {
+            attrs.Add(("booktitle", hit.ParsedTitle));
+        }
+        return attrs;
+    }
+
+    public bool Handles(SearchRequest r) => r.Function switch
+    {
+        "book" => true,
+        null or "search" => r.Categories.Count == 0 || r.Categories.Any(c => c is >= 7000 and < 8000),
+        _ => false,
+    };
 
     public string BuildQuery(SearchRequest r)
     {

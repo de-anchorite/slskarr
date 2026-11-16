@@ -23,6 +23,8 @@ public sealed class SlskarrOptions
     public DownloadOptions Downloads { get; set; } = new();
 
     public EbookProfileOptions Ebook { get; set; } = new();
+
+    public MusicProfileOptions Music { get; set; } = new();
 }
 
 public sealed class SlskdOptions
@@ -99,5 +101,31 @@ public sealed class EbookProfileOptions
     public long? MaxSizeBytes { get; set; } = 209_715_200;
 
     /// <summary>Defaults to <see cref="AllowedRankingCriteria"/> order when not configured.</summary>
+    public string[] Ranking { get; set; } = [];
+}
+
+public sealed class MusicProfileOptions
+{
+    public static readonly string[] DefaultExtensions =
+        ["flac", "mp3", "m4a", "aac", "ogg", "opus", "wav", "aiff", "aif", "ape", "wv", "alac"];
+
+    public static readonly string[] DefaultFormatPreference =
+        ["flac", "mp3", "m4a", "alac", "ogg", "opus", "aac", "wav", "aiff", "aif", "ape", "wv"];
+
+    public string SabCategory { get; set; } = "music";
+
+    /// <summary>Defaults to <see cref="DefaultExtensions"/> when not configured.</summary>
+    public string[] Extensions { get; set; } = [];
+
+    /// <summary>Defaults to <see cref="DefaultFormatPreference"/> when not configured.</summary>
+    public string[] FormatPreference { get; set; } = [];
+
+    /// <summary>Minimum total size of a release (all files), or null for no limit.</summary>
+    public long? MinSizeBytes { get; set; }
+
+    /// <summary>Maximum total size of a release (all files), or null for no limit.</summary>
+    public long? MaxSizeBytes { get; set; }
+
+    /// <summary>Defaults to <see cref="EbookProfileOptions.AllowedRankingCriteria"/> order when not configured.</summary>
     public string[] Ranking { get; set; } = [];
 }

@@ -1,3 +1,4 @@
+using Slskarr.Data;
 using Slskarr.Search;
 using Slskarr.Soulseek;
 
@@ -27,6 +28,9 @@ public sealed record ReleaseCandidate(
     int UploadSpeed,
     IReadOnlyList<CandidateFile> Files);
 
+/// <summary>A Newznab caps category with its sub-categories.</summary>
+public sealed record NewznabCategory(int Id, string Name, IReadOnlyList<(int Id, string Name)> Subcats);
+
 /// <summary>A media type Slskarr can search for and download (v1: ebooks).</summary>
 public interface IMediaProfile
 {
@@ -38,6 +42,16 @@ public interface IMediaProfile
 
     /// <summary>True when a finished release is a folder (music), false when it is one file (ebooks).</summary>
     bool StorageIsFolder { get; }
+
+    /// <summary>True when a release may be hidden because a better release of the same work (a superset) exists.</summary>
+    bool CoalesceBySuperset { get; }
+
+    NewznabCategory CapsCategory { get; }
+
+    IReadOnlyList<int> ItemCategories(HitEntity hit);
+
+    /// <summary>Extra <c>newznab:attr</c> name/value pairs for a result item.</summary>
+    IReadOnlyList<(string Name, string Value)> ItemAttributes(HitEntity hit);
 
     /// <summary>Ranking criteria, in priority order, handed to <see cref="Ranker"/>.</summary>
     IReadOnlyList<string> Ranking { get; }

@@ -388,6 +388,10 @@ internal sealed class FolderProfile : IMediaProfile
     public string Name => "folder";
     public IReadOnlyList<int> Categories => [3000];
     public string SabCategory => DownloadHarness.MusicCategory;
+    public bool CoalesceBySuperset => false;
+    public NewznabCategory CapsCategory => new(1, "Stub", []);
+    public IReadOnlyList<int> ItemCategories(HitEntity hit) => [];
+    public IReadOnlyList<(string Name, string Value)> ItemAttributes(HitEntity hit) => [];
     public bool StorageIsFolder => true;
     public IReadOnlyList<string> Ranking => [];
     public bool Handles(SearchRequest r) => false;
