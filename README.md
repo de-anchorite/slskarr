@@ -3,7 +3,7 @@
 Slskarr (Soulseek-*arr) bridges the *arr stack to the Soulseek network through
 [slskd](https://github.com/slskd/slskd). It presents itself to the *arrs as both an **indexer**
 (Newznab API) and a **download client** (SABnzbd API), so no *arr plugin is needed. This first
-version supports **ebooks** (Chaptarr / Readarr).
+version supports **ebooks** (Chaptarr / Readarr) and **music** (Lidarr).
 
 How it works: the *arr searches the Slskarr "indexer"; Slskarr searches Soulseek via slskd and returns
 releases named after the Soulseek files. When the *arr grabs one, it hands Slskarr a stub NZB; Slskarr
@@ -15,10 +15,10 @@ Slskarr is gentle with the Soulseek network: searches are rate-limited and cache
 
 ## Quick start (Docker)
 
-See [`examples/docker-compose.yml`](examples/docker-compose.yml) for slskd + Chaptarr + Slskarr.
-The important part: **slskd's downloads directory must be mounted at the same path in slskd and
-Chaptarr**, and `Slskarr__Slskd__DownloadsPath` must be that path, so the storage paths Slskarr reports
-are valid for Chaptarr. Slskarr never reads or writes the downloaded files itself (it asks slskd to
+See [`examples/docker-compose.yml`](examples/docker-compose.yml) for slskd + Chaptarr + Lidarr + Slskarr.
+The important part: **slskd's downloads directory must be mounted at the same path in slskd,
+Chaptarr and Lidarr**, and `Slskarr__Slskd__DownloadsPath` must be that path, so the storage paths Slskarr reports
+are valid for Chaptarr and Lidarr. Slskarr never reads or writes the downloaded files itself (it asks slskd to
 delete them), so it does not need the downloads volume.
 
 ```bash
@@ -87,11 +87,48 @@ item, and a fresh Slskarr has none. Until real hits are stored, the feed returns
 it (you may see it in the debug log), and grabbing it fails with "No such item". It stops appearing as
 soon as the first search stores hits.
 
+## Lidarr setup
+
+**Indexer** (Settings > Indexers > Add > Newznab):
+
+| Field | Value |
+| --- | --- |
+| URL | `http://slskarr:8080/newznab` |
+| API Path | `/api` |
+| API Key | your `Slskarr__ApiKey` (blank if unset) |
+| Categories | `3000,3010,3040` |
+
+**Download client** (Settings > Download Clients > Add > SABnzbd):
+
+| Field | Value |
+| --- | --- |
+| Host | `slskarr` |
+| Port | `8080` |
+| URL Base | `sabnzbd` |
+| API Key | your `Slskarr__ApiKey` (blank if unset) |
+| Category | `music` |
+
+How music works:
+
+- **One Soulseek search per album request**: Slskarr searches `<artist> <album>` (for Various Artists
+  releases, the album only), and Lidarr's follow-up `t=search` retry reuses that search. There is no
+  album-only fallback search.
+- A release is one folder, named from the Soulseek folder, e.g. `Artist - Album (1997) [FLAC]`. Disc
+  subfolders (`CD1`, `Disc 2`, ...) are joined into one release. The bracketed tag is what Lidarr reads
+  its quality from: `[FLAC]`, `[FLAC 24bit]`, `[MP3 320]`, `[MP3 VBR V0]`, and so on.
+- **A failed track fails the whole album**: Slskarr reports the download as failed, so Lidarr can
+  retry or pick another release. One slskd batch is queued per disc subfolder.
+- **Cue/image rips** (one big file plus a `.cue`) are skipped.
+- Lidarr imports the album folder from the shared downloads path (reported as the storage path).
+
+The same placeholder item described for Chaptarr applies to a fresh Slskarr here too.
+
 ## Prowlarr (Generic Newznab)
 
 Add an indexer of type **Generic Newznab** with URL `http://slskarr:8080/newznab`, API path `/api`,
-your API key and category `7020`. Whether Prowlarr syncs it to Chaptarr as the "Readarr" app type is
-not yet verified (see the checklist below).
+your API key and categories `3000,3010,3040,7020`. Prowlarr syncs it to **Lidarr** (audio) and to
+**Chaptarr** as the "Readarr" app type (books); the Chaptarr sync was confirmed. Prowlarr offers each
+app only the categories it understands.
 
 ## Configuration
 
@@ -129,6 +166,12 @@ Required: `Slskarr__Slskd__Url` and `Slskarr__Slskd__ApiKey`. Slskarr refuses to
 | `Slskarr__Ebook__MinSizeBytes` | `10240` | Minimum file size. |
 | `Slskarr__Ebook__MaxSizeBytes` | `209715200` | Maximum file size (200 MiB). |
 | `Slskarr__Ebook__Ranking__N` | `NameMatch FreeSlot QueueLength UploadSpeed Format` | Ranking criteria, in order. Allowed: those five. |
+| `Slskarr__Music__SabCategory` | `music` | SABnzbd category for music. |
+| `Slskarr__Music__Extensions__N` | `flac mp3 m4a aac ogg opus wav aiff aif ape wv alac` | Accepted file extensions (case and a leading `.` are ignored). |
+| `Slskarr__Music__FormatPreference__N` | `flac mp3 m4a alac ogg opus aac wav aiff aif ape wv` | Format preference order (used by the `Format` ranking criterion). |
+| `Slskarr__Music__MinSizeBytes` | (unset) | Minimum total size of a release (all files). |
+| `Slskarr__Music__MaxSizeBytes` | (unset) | Maximum total size of a release (all files). |
+| `Slskarr__Music__Ranking__N` | `NameMatch FreeSlot QueueLength UploadSpeed Format` | Ranking criteria, in order. Allowed: those five. |
 
 ## Path mapping
 
@@ -184,6 +227,10 @@ To build a versioned image by hand: `docker build --build-arg VERSION=1.2.3 -t s
 Automated tests use a fake slskd only. Before a release, with a throwaway Soulseek account:
 
 1. Both Chaptarr connection tests (indexer and download client) pass.
-2. Prowlarr Generic Newznab can be added; note whether it syncs to Chaptarr as the "Readarr" app type.
+2. Prowlarr Generic Newznab can be added and syncs to Chaptarr as the "Readarr" app type.
 3. One interactive search shows Soulseek hits with Chaptarr's own rejection reasons.
 4. One grab imports end to end.
+5. Both Lidarr connection tests (indexer and download client) pass.
+6. Prowlarr syncs the indexer to Lidarr.
+7. A Lidarr interactive album search shows Soulseek hits with the right quality (`[FLAC]`, `[MP3 320]`, ...).
+8. One album grab (including a multi-disc one) imports end to end in Lidarr.

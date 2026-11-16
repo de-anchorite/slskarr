@@ -9,7 +9,8 @@ namespace Slskarr.Downloads;
 /// <summary>
 /// Polls slskd for every active download job, mirrors its state and applies the patience rule:
 /// any progress (queue position change, more bytes) resets the stall clock; no progress for
-/// <see cref="DownloadOptions.StallTimeout"/> fails the job and cancels the transfer.
+/// <see cref="DownloadOptions.StallTimeout"/> fails the job and cancels its transfers. A job is one or more files
+/// in one or more slskd batches; its state is aggregated over all files, and one failed file fails the job.
 /// </summary>
 public sealed class DownloadMonitor(
     IDbContextFactory<SlskarrDb> dbFactory,
@@ -31,8 +32,8 @@ public sealed class DownloadMonitor(
     // When slskd first became unreachable for a job; the outage is not held against its stall clock.
     private readonly Dictionary<Guid, DateTimeOffset> _unreachableSince = [];
 
-    // Slskarr's own downtime is not held against a job's stall clock either: until a job's first poll in this
-    // process has been saved, its clock is moved up to the time this process started.
+    // Slskarr's own downtime is not held against a job's stall clock (or its add grace) either: until a job's first
+    // poll in this process has been saved, both are moved up to the time this process started.
     private readonly DateTimeOffset _startedAt = time.GetUtcNow();
     private readonly HashSet<Guid> _resumed = [];
 
@@ -101,27 +102,48 @@ public sealed class DownloadMonitor(
     private async Task PollJobAsync(Guid id, CancellationToken ct)
     {
         await using var db = await dbFactory.CreateDbContextAsync(ct);
-        var job = await db.DownloadJobs.FirstOrDefaultAsync(j => j.Id == id, ct);
+        var job = await db.DownloadJobs.Include(j => j.Files).FirstOrDefaultAsync(j => j.Id == id, ct);
         if (job is null || job.State is not (DownloadState.Queued or DownloadState.Downloading))
         {
             return;
         }
 
         var now = time.GetUtcNow();
-        if (!_resumed.Contains(id) && job.LastProgressAt < _startedAt)
+        if (!_resumed.Contains(id))
         {
-            job.LastProgressAt = _startedAt;
+            if (job.LastProgressAt < _startedAt)
+            {
+                job.LastProgressAt = _startedAt;
+            }
+
+            // An add or retry in flight when Slskarr stopped gets its full add grace again.
+            if (job.EnqueuedAt < _startedAt)
+            {
+                job.EnqueuedAt = _startedAt;
+            }
         }
 
-        SlskdBatch? batch;
-        try
+        // One poll per batch (disc folder); a file is matched to its transfer by remote path.
+        var transfers = new Dictionary<JobFileEntity, SlskdTransfer?>();
+        foreach (var group in job.Files.GroupBy(f => f.BatchId))
         {
-            batch = await slskd.GetBatchAsync(job.BatchId, ct);
-        }
-        catch (SlskdUnavailableException)
-        {
-            _unreachableSince.TryAdd(id, now);
-            throw;
+            SlskdBatch? batch;
+            try
+            {
+                batch = await slskd.GetBatchAsync(group.Key, ct);
+            }
+            catch (SlskdUnavailableException)
+            {
+                _unreachableSince.TryAdd(id, now);
+                throw;
+            }
+
+            foreach (var file in group)
+            {
+                // A single-file job also accepts its batch's only transfer under another name (ebooks, as before).
+                transfers[file] = batch?.Transfers.FirstOrDefault(t => t.Filename == file.RemotePath)
+                    ?? (job.Files.Count == 1 ? batch?.Transfers.FirstOrDefault() : null);
+            }
         }
 
         if (_unreachableSince.Remove(id, out var since))
@@ -129,66 +151,100 @@ public sealed class DownloadMonitor(
             job.LastProgressAt = new[] { now, job.LastProgressAt + (now - since) }.Min();
         }
 
-        var transfer = batch?.Transfers.FirstOrDefault(t => t.Filename == job.RemotePath) ?? batch?.Transfers.FirstOrDefault();
-        if (transfer is null)
+        string? failure = null;
+        var gone = new List<JobFileEntity>();
+        var finished = new List<JobFileEntity>(); // failed in slskd already: nothing left to cancel
+        var queued = new List<(JobFileEntity File, SlskdTransfer Transfer)>();
+        foreach (var file in job.Files)
         {
-            if (!InAddGrace(job, now))
+            var transfer = transfers[file];
+            if (transfer is null)
             {
-                await ResolveMissingAsync(job, now, ct);
+                if (!InAddGrace(file, job, now))
+                {
+                    gone.Add(file);
+                }
+
+                continue;
             }
-        }
-        else
-        {
-            job.SlskdTransferId ??= transfer.Id;
+
+            file.SlskdTransferId ??= transfer.Id;
             if (SlskdStates.IsSucceeded(transfer.State))
             {
-                Complete(job, now);
-                job.BytesDone = transfer.BytesTransferred;
+                Mirror(job, file, DownloadState.Completed, transfer.BytesTransferred, null, now);
             }
             else if (SlskdStates.IsFailed(transfer.State, out var reason))
             {
-                Fail(job, "Soulseek: " + reason);
+                failure ??= FailureMessage(job, file, reason);
+                finished.Add(file);
             }
             else if (SlskdStates.IsInProgress(transfer.State))
             {
-                job.State = DownloadState.Downloading;
-                job.PlaceInQueue = null;
-                if (transfer.BytesTransferred > job.BytesDone)
-                {
-                    job.LastProgressAt = now;
-                }
-
-                job.BytesDone = transfer.BytesTransferred;
+                Mirror(job, file, DownloadState.Downloading, transfer.BytesTransferred, null, now);
             }
             else if (SlskdStates.IsQueued(transfer.State))
             {
-                job.State = DownloadState.Queued;
-                int? place;
-                try
-                {
-                    place = await slskd.GetPlaceInQueueAsync(job.Username, transfer.Id, ct);
-                }
-                catch (SlskdUnavailableException)
-                {
-                    // slskd answered the batch call, so this is the peer being unreachable: position
-                    // unknown, no progress, and the stall clock keeps running.
-                    place = job.PlaceInQueue;
-                }
-
-                if (place != job.PlaceInQueue)
-                {
-                    job.PlaceInQueue = place;
-                    job.LastProgressAt = now;
-                }
-            }
-
-            if (job.State is DownloadState.Queued or DownloadState.Downloading
-                && now - job.LastProgressAt > _options.Downloads.StallTimeout)
-            {
-                await slskd.CancelDownloadAsync(job.Username, transfer.Id, remove: true, ct);
-                Fail(job, $"Stalled: no progress for {_options.Downloads.StallTimeout}");
+                queued.Add((file, transfer));
             }
         }
+
+        // One queue-position request per batch per poll (the first queued file by remote path): a peer request
+        // per track would be 12 per album every poll. The others keep their last known position.
+        foreach (var batch in queued.GroupBy(q => q.File.BatchId))
+        {
+            var asked = batch.MinBy(q => q.File.RemotePath, StringComparer.Ordinal);
+            foreach (var (file, transfer) in batch)
+            {
+                var place = file.PlaceInQueue;
+                if (file == asked.File)
+                {
+                    try
+                    {
+                        place = await slskd.GetPlaceInQueueAsync(job.Username, transfer.Id, ct);
+                    }
+                    catch (SlskdUnavailableException)
+                    {
+                        // slskd answered the batch call, so this is the peer being unreachable: position
+                        // unknown, no progress, and the stall clock keeps running.
+                    }
+                }
+
+                Mirror(job, file, DownloadState.Queued, transfer.BytesTransferred, place, now);
+            }
+        }
+
+        if (failure is null && gone.Count > 0 && !await ResolveMissingAsync(job, gone, now, ct))
+        {
+            failure = "Transfer disappeared from slskd";
+        }
+
+        if (failure is not null)
+        {
+            if (!await FailAsync(job, failure, finished, ct))
+            {
+                return; // removal not confirmed: the job stays active, nothing is saved, the next poll retries
+            }
+        }
+        else if (job.Files.All(f => f.State == DownloadState.Completed))
+        {
+            job.State = DownloadState.Completed;
+            job.CompletedAt = now;
+            job.StoragePath = StoragePaths.Storage(_options.Slskd, _options.Paths, job.Id, IsSingleFileRelease(job) ? job.RemotePath : null);
+        }
+        else
+        {
+            job.State = job.Files.Any(f => f.State == DownloadState.Downloading) ? DownloadState.Downloading : DownloadState.Queued;
+            if (now - job.LastProgressAt > _options.Downloads.StallTimeout
+                && !await FailAsync(job, $"Stalled: no progress for {_options.Downloads.StallTimeout}", [], ct))
+            {
+                return;
+            }
+        }
+
+        job.BytesDone = job.Files.Sum(f => f.BytesDone);
+        job.PlaceInQueue = job.State is DownloadState.Queued or DownloadState.Downloading
+            ? job.Files.Where(f => f.State == DownloadState.Queued && f.PlaceInQueue is not null).Min(f => f.PlaceInQueue)
+            : null;
 
         // A delete may have landed while we were talking to slskd; do not resurrect the job.
         var current = await db.DownloadJobs.AsNoTracking().Where(j => j.Id == id).Select(j => j.State).FirstAsync(ct);
@@ -200,42 +256,79 @@ public sealed class DownloadMonitor(
         _resumed.Add(id);
     }
 
-    /// <summary>
-    /// An add or retry may still be enqueueing: no transfer id yet, and the latest (re)enqueue is recent.
-    /// <see cref="DownloadJobEntity.LastProgressAt"/> is that time, as both add and retry set it and nothing else
-    /// moves it forward before the job has a transfer.
-    /// </summary>
-    private static bool InAddGrace(DownloadJobEntity job, DateTimeOffset now) =>
-        job.SlskdTransferId is null && now - job.LastProgressAt < AddGrace;
-
-    /// <summary>slskd no longer knows the transfer: it only counts as done if the full file is on disk.</summary>
-    private async Task ResolveMissingAsync(DownloadJobEntity job, DateTimeOffset now, CancellationToken ct)
+    /// <summary>Records a file's state; more bytes or a moved queue position count as progress.</summary>
+    private static void Mirror(DownloadJobEntity job, JobFileEntity file, DownloadState state, long bytes, int? place, DateTimeOffset now)
     {
-        var files = await slskd.ListDownloadDirAsync(StoragePaths.JobDir(job.Id), ct);
-        var name = SoulseekPath.FileName(job.RemotePath);
-        if (files?.Any(f => string.Equals(f.Name, name, StringComparison.Ordinal) && f.Length == job.Size) == true)
+        if (bytes > file.BytesDone || (state == DownloadState.Queued && place != file.PlaceInQueue))
         {
-            Complete(job, now);
-            job.BytesDone = job.Size;
+            job.LastProgressAt = now;
         }
-        else
-        {
-            Fail(job, "Transfer disappeared from slskd");
-        }
+
+        file.State = state;
+        file.BytesDone = bytes;
+        file.PlaceInQueue = place;
     }
 
-    private void Complete(DownloadJobEntity job, DateTimeOffset now)
-    {
-        job.State = DownloadState.Completed;
-        job.CompletedAt = now;
-        job.PlaceInQueue = null;
-        job.StoragePath = StoragePaths.Storage(_options.Slskd, _options.Paths, job.Id, job.RemotePath);
-    }
+    private static string FailureMessage(DownloadJobEntity job, JobFileEntity file, string reason) =>
+        job.Files.Count > 1 ? $"Soulseek: {reason} ({SoulseekPath.FileName(file.RemotePath)})" : "Soulseek: " + reason;
 
-    private static void Fail(DownloadJobEntity job, string message)
+    /// <summary>Cancels and removes every transfer of the job (but <paramref name="except"/>), then marks the job and all its files failed.</summary>
+    private async Task<bool> FailAsync(DownloadJobEntity job, string message, List<JobFileEntity> except, CancellationToken ct)
     {
+        if (!await TransferCleanup.RemoveAsync(slskd, logger, job, [.. job.Files.Except(except)], ct))
+        {
+            return false;
+        }
+
         job.State = DownloadState.Failed;
         job.FailMessage = message;
-        job.PlaceInQueue = null;
+        foreach (var file in job.Files)
+        {
+            file.State = DownloadState.Failed;
+        }
+
+        return true;
+    }
+
+    /// <summary>
+    /// An ebook-shaped job (one file that is the release itself) is stored as that file; anything else (an album,
+    /// even one with a single track) as the job folder. Decided by the job, not its SAB category, which can change.
+    /// </summary>
+    private static bool IsSingleFileRelease(DownloadJobEntity job) =>
+        job.Files.Count == 1 && job.Files[0].RemotePath == job.RemotePath;
+
+    /// <summary>
+    /// A file with no recorded transfer may still be enqueueing: it has no transfer id and the job's latest
+    /// (re)enqueue, <see cref="DownloadJobEntity.EnqueuedAt"/> (set by add and retry), is recent. Progress on
+    /// other files does not move it, so a batch that never appears is detected AddGrace after the enqueue.
+    /// </summary>
+    private static bool InAddGrace(JobFileEntity file, DownloadJobEntity job, DateTimeOffset now) =>
+        file.SlskdTransferId is null && now - job.EnqueuedAt < AddGrace;
+
+    /// <summary>
+    /// slskd no longer knows these files' transfers: each only counts as done if its full file is on disk
+    /// (one listing per disc folder). Returns false when any is not.
+    /// </summary>
+    private async Task<bool> ResolveMissingAsync(DownloadJobEntity job, List<JobFileEntity> gone, DateTimeOffset now, CancellationToken ct)
+    {
+        var ok = true;
+        foreach (var dir in gone.GroupBy(f => f.Subdir))
+        {
+            var listing = await slskd.ListDownloadDirAsync(StoragePaths.JobDir(job.Id, dir.Key), ct);
+            foreach (var file in dir)
+            {
+                var name = SoulseekPath.FileName(file.RemotePath);
+                if (listing?.Any(l => string.Equals(l.Name, name, StringComparison.Ordinal) && l.Length == file.Size) == true)
+                {
+                    Mirror(job, file, DownloadState.Completed, file.Size, null, now);
+                }
+                else
+                {
+                    ok = false;
+                }
+            }
+        }
+
+        return ok;
     }
 }

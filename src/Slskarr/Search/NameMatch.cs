@@ -1,6 +1,7 @@
 using System.Globalization;
 using System.Text;
 using Slskarr.Profiles;
+using Slskarr.Profiles.Music;
 
 namespace Slskarr.Search;
 
@@ -26,10 +27,18 @@ public static class NameMatch
             return MatchBucket.None;
         }
 
-        var authorTokens = Tokens(request.Author);
-        var titleTokens = Tokens(string.IsNullOrWhiteSpace(request.Title) ? request.Query : request.Title);
+        // Music requests: Artist is the author and Album (brackets removed, as in BuildQuery) the title.
+        // Various Artists carries no author tokens.
+        var music = !string.IsNullOrWhiteSpace(request.Artist) || !string.IsNullOrWhiteSpace(request.Album);
+        var author = music
+            ? (MusicProfile.IsVariousArtists(request.Artist?.Trim() ?? "") ? null : request.Artist)
+            : request.Author;
+        var title = music && !string.IsNullOrWhiteSpace(request.Album) ? MusicProfile.StripBrackets(request.Album) : request.Title;
+
+        var authorTokens = Tokens(author);
+        var titleTokens = Tokens(string.IsNullOrWhiteSpace(title) ? request.Query : title);
         var requestTokens = new HashSet<string>(authorTokens, StringComparer.Ordinal);
-        requestTokens.UnionWith(Tokens(request.Title));
+        requestTokens.UnionWith(Tokens(title));
         requestTokens.UnionWith(Tokens(request.Query));
         if (requestTokens.Count == 0)
         {

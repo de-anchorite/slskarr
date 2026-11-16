@@ -35,6 +35,19 @@ public sealed class StoragePathsTests
     }
 
     [Fact]
+    public void Storage_folder_for_music()
+    {
+        StoragePaths.Storage(new SlskdOptions { DownloadsPath = "/downloads" }, new PathOptions(), Id, null)
+            .ShouldBe("/downloads/slskarr/11111111222233334444555555555555");
+    }
+
+    [Fact]
+    public void JobDir_with_subdir_is_nested()
+    {
+        StoragePaths.JobDir(Id, "CD1").ShouldBe("slskarr/11111111222233334444555555555555/CD1");
+    }
+
+    [Fact]
     public void JobDir_is_relative()
     {
         StoragePaths.JobDir(Id).ShouldBe("slskarr/11111111222233334444555555555555");

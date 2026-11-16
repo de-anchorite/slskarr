@@ -82,6 +82,38 @@ public sealed class PagesTests : IDisposable
     }
 
     [Fact]
+    public async Task Release_page_lists_files()
+    {
+        var (f, c) = Start();
+        Seed(f, db =>
+        {
+            var hit = Hit("hitf", @"@@a\Music\Album");
+            hit.Files.Add(new HitFileEntity { HitId = "hitf", RemotePath = @"@@a\Music\Album\CD1\01 One<b>.flac", Size = 31_111_222, Subdir = "CD1", BitDepth = 24, SampleRate = 96000, LengthSeconds = 185 });
+            hit.Files.Add(new HitFileEntity { HitId = "hitf", RemotePath = @"@@a\Music\Album\02 Two.mp3", Size = 7_654_321, BitRate = 320, LengthSeconds = 61 });
+            hit.Files.Add(new HitFileEntity { HitId = "hitf", RemotePath = @"@@a\Music\Album\cover.jpg", Size = 99 });
+            db.Hits.Add(hit);
+            db.Hits.Add(Hit("hite", @"@@a\Books\Dune.epub"));
+        });
+
+        var html = await (await c.GetAsync("/release/hitf")).Content.ReadAsStringAsync();
+
+        html.ShouldContain("01 One&lt;b&gt;.flac");
+        html.ShouldContain("CD1");
+        html.ShouldContain("31111222");
+        html.ShouldContain("24-bit / 96000 Hz");
+        html.ShouldContain("3:05");
+        html.ShouldContain("02 Two.mp3");
+        html.ShouldContain("7654321");
+        html.ShouldContain("320 kbps");
+        html.ShouldContain("1:01");
+        html.ShouldContain("cover.jpg");
+        html.ShouldNotContain("One<b>");
+
+        var ebook = await (await c.GetAsync("/release/hite")).Content.ReadAsStringAsync();
+        ebook.ShouldContain("Dune.epub");
+    }
+
+    [Fact]
     public async Task Release_page_shows_non_deleted_job_state()
     {
         var (f, c) = Start();

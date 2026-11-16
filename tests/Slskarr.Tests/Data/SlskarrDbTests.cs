@@ -1,4 +1,6 @@
 using Microsoft.EntityFrameworkCore;
+using Microsoft.EntityFrameworkCore.Infrastructure;
+using Microsoft.EntityFrameworkCore.Migrations;
 using Microsoft.Extensions.DependencyInjection;
 using Shouldly;
 using Slskarr.Data;
@@ -82,6 +84,7 @@ public sealed class SlskarrDbTests : IDisposable
                 Title = "T",
                 Username = "peer",
                 RemotePath = @"@@x\a.epub",
+                Files = [new JobFileEntity { RemotePath = @"@@x\a.epub", Size = 99, Subdir = "", BatchId = id, SlskdTransferId = transfer, State = DownloadState.Downloading, BytesDone = 40, PlaceInQueue = 3 }],
                 Size = 99,
                 State = DownloadState.Downloading,
                 BytesDone = 40,
@@ -90,7 +93,6 @@ public sealed class SlskarrDbTests : IDisposable
                 CreatedAt = t,
                 CompletedAt = null,
                 FailMessage = "oops",
-                SlskdTransferId = transfer,
                 StoragePath = "/data/x",
             });
             db.SearchJobs.Add(new SearchJobEntity
@@ -107,17 +109,60 @@ public sealed class SlskarrDbTests : IDisposable
         }
 
         using var read = NewDb();
-        var job = read.DownloadJobs.Single();
+        var job = read.DownloadJobs.Include(j => j.Files).Single();
         job.Id.ShouldBe(id);
         job.State.ShouldBe(DownloadState.Downloading);
         job.PlaceInQueue.ShouldBe(3);
         job.LastProgressAt.UtcTicks.ShouldBe(t.UtcTicks);
         job.CompletedAt.ShouldBeNull();
-        job.SlskdTransferId.ShouldBe(transfer);
+        job.Files.Single().SlskdTransferId.ShouldBe(transfer);
         job.FailMessage.ShouldBe("oops");
         var search = read.SearchJobs.Single();
         search.State.ShouldBe(SearchJobState.Queued);
         search.SlskdSearchId.ShouldBeNull();
+    }
+
+    [Fact]
+    public void Migration_wraps_existing_rows_in_one_file()
+    {
+        Directory.CreateDirectory(_dir);
+        var options = new DbContextOptionsBuilder<SlskarrDb>()
+            .UseSqlite($"Data Source={Path.Combine(_dir, "slskarr.db")};Pooling=False")
+            .Options;
+        var batch = Guid.NewGuid();
+        var transfer = Guid.NewGuid();
+        var jobId = Guid.NewGuid();
+        var ticks = new DateTimeOffset(2026, 3, 4, 5, 6, 7, TimeSpan.Zero).UtcTicks;
+        using (var old = new SlskarrDb(options))
+        {
+            old.GetService<IMigrator>().Migrate("20261114132044_AddBatchId");
+            old.Database.ExecuteSql($"""
+                INSERT INTO Hits (Id, SearchKey, Profile, Username, RemotePath, Size, ReleaseTitle, Format, FreeSlot, QueueLength, UploadSpeed, Rank, SeenAt)
+                VALUES ('h1', 'k', 'ebook', 'peer', '@@x\a.epub', 1234, 'T', 'epub', 1, 0, 0, 1, {ticks})
+                """);
+            old.Database.ExecuteSql($"""
+                INSERT INTO DownloadJobs (Id, BatchId, HitId, Category, Title, Username, RemotePath, Size, State, BytesDone, PlaceInQueue, LastProgressAt, CreatedAt, SlskdTransferId)
+                VALUES ({jobId}, {batch}, 'h1', 'ebooks', 'T', 'peer', '@@x\a.epub', 1234, 'Downloading', 40, 3, {ticks}, {ticks}, {transfer})
+                """);
+        }
+
+        using var db = NewDb();
+        var hit = db.Hits.Include(h => h.Files).Single();
+        var hitFile = hit.Files.ShouldHaveSingleItem();
+        hitFile.RemotePath.ShouldBe(@"@@x\a.epub");
+        hitFile.Size.ShouldBe(1234);
+        hitFile.Subdir.ShouldBe("");
+
+        var job = db.DownloadJobs.Include(j => j.Files).Single();
+        job.Id.ShouldBe(jobId);
+        var file = job.Files.ShouldHaveSingleItem();
+        file.BatchId.ShouldBe(batch);
+        file.SlskdTransferId.ShouldBe(transfer);
+        file.BytesDone.ShouldBe(40);
+        file.State.ShouldBe(DownloadState.Downloading);
+        file.PlaceInQueue.ShouldBe(3);
+        file.RemotePath.ShouldBe(@"@@x\a.epub");
+        file.Subdir.ShouldBe("");
     }
 
     [Fact]

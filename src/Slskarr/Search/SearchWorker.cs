@@ -349,7 +349,7 @@ public sealed class SearchWorker(
 
     /// <summary>
     /// Stores the hits and marks the job Done in one transaction. Hits upsert by (SearchKey, Username,
-    /// RemotePath), so existing ones keep their Id. Hits get <c>SeenAt</c> equal to the job's <c>CompletedAt</c>,
+    /// RemotePath, Format), so existing ones keep their Id. Hits get <c>SeenAt</c> equal to the job's <c>CompletedAt</c>,
     /// which is how the coordinator tells this run's hits from older ones.
     /// </summary>
     private async Task CompleteAsync(string key, IReadOnlyList<ReleaseCandidate> ranked, CancellationToken ct)
@@ -357,12 +357,12 @@ public sealed class SearchWorker(
         await using (var db = await dbFactory.CreateDbContextAsync(ct))
         {
             var now = time.GetUtcNow();
-            var existing = (await db.Hits.Where(h => h.SearchKey == key).ToListAsync(ct))
-                .ToDictionary(h => (h.Username, h.RemotePath));
+            var existing = (await db.Hits.Include(h => h.Files).Where(h => h.SearchKey == key).ToListAsync(ct))
+                .ToDictionary(h => (h.Username, h.RemotePath, h.Format));
             for (var i = 0; i < ranked.Count; i++)
             {
                 var c = ranked[i];
-                if (!existing.TryGetValue((c.Username, c.RemotePath), out var hit))
+                if (!existing.TryGetValue((c.Username, c.RemotePath, c.Name.Format), out var hit))
                 {
                     hit = db.Hits.Add(new HitEntity
                     {
@@ -374,9 +374,12 @@ public sealed class SearchWorker(
                         ReleaseTitle = c.ReleaseTitle,
                         Format = c.Name.Format,
                     }).Entity;
+                    existing[(c.Username, c.RemotePath, c.Name.Format)] = hit;
                 }
 
-                hit.Size = c.Size;
+                ReplaceFiles(hit, c.Files);
+
+                hit.Size = c.Files.Sum(f => f.Size);
                 hit.ReleaseTitle = c.ReleaseTitle;
                 hit.ParsedAuthor = c.Name.Author;
                 hit.ParsedTitle = c.Name.Title;
@@ -397,6 +400,34 @@ public sealed class SearchWorker(
         }
 
         coordinator.NotifyFinished(key);
+    }
+
+    /// <summary>Syncs the hit's files to the candidate's: reuses rows by path (unique index), drops stale ones, adds new ones.</summary>
+    private static void ReplaceFiles(HitEntity hit, IReadOnlyList<CandidateFile> files)
+    {
+        var byPath = files.GroupBy(f => f.RemotePath).ToDictionary(g => g.Key, g => g.First());
+        foreach (var stale in hit.Files.Where(f => !byPath.ContainsKey(f.RemotePath)).ToList())
+        {
+            hit.Files.Remove(stale);
+        }
+
+        foreach (var f in byPath.Values)
+        {
+            var row = hit.Files.FirstOrDefault(r => r.RemotePath == f.RemotePath);
+            if (row is null)
+            {
+                row = new HitFileEntity { HitId = hit.Id, RemotePath = f.RemotePath };
+                hit.Files.Add(row);
+            }
+
+            row.Size = f.Size;
+            row.Subdir = f.Subdir;
+            row.BitRate = f.BitRate;
+            row.BitDepth = f.BitDepth;
+            row.SampleRate = f.SampleRate;
+            row.LengthSeconds = f.Length;
+            row.IsVbr = f.IsVbr;
+        }
     }
 
     private async Task FailAsync(string key, string error, CancellationToken ct)

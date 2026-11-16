@@ -80,8 +80,202 @@ public sealed class NewznabContractTests : IDisposable
         searching.Element("search")!.Attribute("available")!.Value.ShouldBe("yes");
         searching.Element("tv-search")!.Attribute("available")!.Value.ShouldBe("no");
         searching.Element("movie-search")!.Attribute("available")!.Value.ShouldBe("no");
-        searching.Element("audio-search")!.Attribute("available")!.Value.ShouldBe("no");
+        searching.Element("audio-search")!.Attribute("available")!.Value.ShouldBe("yes");
         caps.Descendants("category").Concat(caps.Descendants("subcat")).Select(c => c.Attribute("id")!.Value).ShouldContain("7020");
+    }
+
+    private static HitEntity MusicHit(string id, string title, int ageMinutes = 0, string format = "FLAC") =>
+        new()
+        {
+            Id = id, SearchKey = "x", Profile = "music", Username = "peer", RemotePath = @"@@a\Music\Radiohead\OK Computer", Size = 300_000_000,
+            ReleaseTitle = title, ParsedAuthor = "Radiohead", ParsedTitle = "OK Computer", Format = format, Rank = 1,
+            SeenAt = new DateTimeOffset(2026, 1, 1, 0, 0, 0, TimeSpan.Zero) - TimeSpan.FromMinutes(ageMinutes),
+        };
+
+    private async Task SeedMusic(SearchRequest? doneFor, params HitEntity[] hits)
+    {
+        var dbf = _factory.Services.GetRequiredService<IDbContextFactory<SlskarrDb>>();
+        await using var db = await dbf.CreateDbContextAsync();
+        var now = _factory.Time.GetUtcNow();
+        if (doneFor is not null)
+        {
+            var profile = _factory.Services.GetRequiredService<ProfileRegistry>().ByName("music")!;
+            var key = SearchKey.For(profile, doneFor).Value;
+            db.SearchJobs.Add(new SearchJobEntity
+            {
+                Key = key, Profile = "music", QueryText = profile.BuildQuery(doneFor), RequestJson = SearchCoordinator.WriteRequest(doneFor),
+                State = SearchJobState.Done, CreatedAt = now, LastRequestedAt = now, CompletedAt = now,
+            });
+            foreach (var h in hits)
+            {
+                h.SearchKey = key;
+            }
+        }
+
+        db.Hits.AddRange(hits);
+        await db.SaveChangesAsync();
+    }
+
+    private static readonly SearchRequest OkComputer = new(null, null, null, [3000, 3010, 3040], "Radiohead", "OK Computer", "music");
+
+    [Fact]
+    public async Task Caps_announce_audio_search_and_categories()
+    {
+        using var client = _factory.CreateClient();
+
+        var caps = (await Xml(await client.GetAsync("/newznab/api?t=caps"))).Root!;
+
+        var audio = caps.Element("searching")!.Element("audio-search")!;
+        audio.Attribute("available")!.Value.ShouldBe("yes");
+        var supported = audio.Attribute("supportedParams")!.Value.Split(',');
+        supported.ShouldContain("q");
+        supported.ShouldContain("artist");
+        supported.ShouldContain("album");
+        var categories = caps.Element("categories")!.Elements("category").ToDictionary(c => c.Attribute("id")!.Value);
+        categories.Keys.ShouldBe(["7000", "3000"], ignoreOrder: true);
+        categories["3000"].Elements("subcat").Select(s => s.Attribute("id")!.Value).ShouldBe(["3010", "3040"], ignoreOrder: true);
+        categories["7000"].Elements("subcat").Select(s => s.Attribute("id")!.Value).ShouldBe(["7020"]);
+    }
+
+    [Fact]
+    public async Task Music_search_returns_music_items()
+    {
+        await SeedMusic(OkComputer, MusicHit("MMMMMMMMMMMMMMMMMMMMMM", "Radiohead - OK Computer (1997) [FLAC]"));
+        using var client = _factory.CreateClient();
+
+        var doc = await Xml(await client.GetAsync(
+            "/newznab/api?t=music&cat=3000,3010,3040&extended=1&offset=0&limit=100&q=&artist=Radiohead&album=OK%20Computer"));
+
+        var item = doc.Descendants("item").ShouldHaveSingleItem();
+        item.Element("title")!.Value.ShouldBe("Radiohead - OK Computer (1997) [FLAC]");
+        Values(item, "category").ShouldBe(["3000", "3040"]);
+        Values(item, "artist").ShouldBe(["Radiohead"]);
+        Values(item, "album").ShouldBe(["OK Computer"]);
+        Values(item, "author").ShouldBeEmpty();
+    }
+
+    [Fact]
+    public async Task Lidarr_tier2_is_one_search()
+    {
+        var slskd = new Slskarr.Tests.Search.FakeSearchSlskd(TimeProvider.System);
+        using var factory = new SlskarrFactory().WithServices(s => s.AddSingleton<Slskarr.Soulseek.ISlskdClient>(slskd));
+        var dbf = factory.Services.GetRequiredService<IDbContextFactory<SlskarrDb>>();
+        var profile = factory.Services.GetRequiredService<ProfileRegistry>().ByName("music")!;
+        await using (var db = await dbf.CreateDbContextAsync())
+        {
+            var now = factory.Time.GetUtcNow();
+            db.SearchJobs.Add(new SearchJobEntity
+            {
+                Key = SearchKey.For(profile, OkComputer).Value, Profile = "music", QueryText = "Radiohead OK Computer",
+                RequestJson = SearchCoordinator.WriteRequest(OkComputer), State = SearchJobState.Done,
+                CreatedAt = now, LastRequestedAt = now, CompletedAt = now,
+            });
+            await db.SaveChangesAsync();
+        }
+
+        using var client = factory.CreateClient();
+        var r = await client.GetAsync("/newznab/api?t=search&cat=3000,3010,3040&extended=1&offset=0&limit=100&q=Radiohead%20OK%20Computer");
+
+        (await Xml(r)).Descendants("item").ShouldBeEmpty();
+        slskd.StartedTexts.ShouldBeEmpty();
+        await using var check = await dbf.CreateDbContextAsync();
+        check.SearchJobs.Count().ShouldBe(1);
+    }
+
+    // Lidarr's self-titled shape: tier 1 sends year separately, tier 2 appends it to "artist album".
+    [Fact]
+    public async Task Lidarr_self_titled_tiers_are_one_search()
+    {
+        var slskd = new Slskarr.Tests.Search.FakeSearchSlskd(TimeProvider.System);
+        using var factory = new SlskarrFactory().WithServices(s => s.AddSingleton<Slskarr.Soulseek.ISlskdClient>(slskd));
+        var dbf = factory.Services.GetRequiredService<IDbContextFactory<SlskarrDb>>();
+        var profile = factory.Services.GetRequiredService<ProfileRegistry>().ByName("music")!;
+        var weezer = new SearchRequest(null, null, null, [3000, 3010, 3040], "Weezer", "Weezer", "music");
+        SearchKey.For(profile, weezer).Value.ShouldBe("music:weezer");
+        await using (var db = await dbf.CreateDbContextAsync())
+        {
+            var now = factory.Time.GetUtcNow();
+            db.SearchJobs.Add(new SearchJobEntity
+            {
+                Key = SearchKey.For(profile, weezer).Value, Profile = "music", QueryText = profile.BuildQuery(weezer),
+                RequestJson = SearchCoordinator.WriteRequest(weezer), State = SearchJobState.Done,
+                CreatedAt = now, LastRequestedAt = now, CompletedAt = now,
+            });
+            await db.SaveChangesAsync();
+        }
+
+        using var client = factory.CreateClient();
+        foreach (var url in new[]
+                 {
+                     "/newznab/api?t=music&cat=3000,3010,3040&extended=1&offset=0&limit=100&q=&artist=Weezer&album=Weezer&year=1994",
+                     "/newznab/api?t=search&cat=3000,3010,3040&extended=1&offset=0&limit=100&q=Weezer%20Weezer%201994",
+                 })
+        {
+            (await Xml(await client.GetAsync(url))).Descendants("item").ShouldBeEmpty(url);
+        }
+
+        slskd.StartedTexts.ShouldBeEmpty();
+        await using var check = await dbf.CreateDbContextAsync();
+        check.SearchJobs.Select(j => j.Key).ShouldBe(["music:weezer"]);
+        check.SearchJobs.Single().QueryText.ShouldBe("Weezer");
+    }
+
+    // Lidarr's artist search: t=music with an empty q and only artist= is a search, not an RSS poll.
+    [Fact]
+    public async Task Lidarr_artist_only_request_searches()
+    {
+        var slskd = new Slskarr.Tests.Search.FakeSearchSlskd(TimeProvider.System);
+        using var factory = new SlskarrFactory().WithServices(s => s.AddSingleton<Slskarr.Soulseek.ISlskdClient>(slskd));
+        using var client = factory.CreateClient();
+
+        var request = client.GetAsync("/newznab/api?t=music&cat=3000,3010,3040&extended=1&offset=0&limit=100&q=&artist=Radiohead");
+        var deadline = DateTime.UtcNow.AddSeconds(10);
+        while (!request.IsCompleted && DateTime.UtcNow < deadline)
+        {
+            factory.Time.Advance(TimeSpan.FromSeconds(1));
+            await Task.Delay(5);
+        }
+
+        var doc = await Xml(await request.WaitAsync(TimeSpan.FromSeconds(1)));
+        doc.Descendants("item").Select(i => i.Element("guid")!.Value).ShouldNotContain(NewznabPlaceholder.Id);
+        slskd.StartedTexts.ShouldBe(["Radiohead"]);
+        var dbf = factory.Services.GetRequiredService<IDbContextFactory<SlskarrDb>>();
+        await using var db = await dbf.CreateDbContextAsync();
+        db.SearchJobs.Select(j => j.Key).ShouldBe(["music:radiohead"]);
+    }
+
+    [Fact]
+    public async Task Music_rss_never_searches()
+    {
+        var slskd = new Slskarr.Tests.Search.FakeSearchSlskd(TimeProvider.System);
+        using var factory = new SlskarrFactory().WithServices(s => s.AddSingleton<Slskarr.Soulseek.ISlskdClient>(slskd));
+        using var client = factory.CreateClient();
+
+        var item = (await Xml(await client.GetAsync("/newznab/api?t=music&cat=3000"))).Descendants("item").ShouldHaveSingleItem();
+
+        item.Element("guid")!.Value.ShouldBe(NewznabPlaceholder.Id);
+        Values(item, "category").ShouldContain("3000");
+        Values(item, "category").ShouldNotContain("7020");
+        slskd.StartedTexts.ShouldBeEmpty();
+        var dbf = factory.Services.GetRequiredService<IDbContextFactory<SlskarrDb>>();
+        await using var db = await dbf.CreateDbContextAsync();
+        db.SearchJobs.Count().ShouldBe(0);
+    }
+
+    [Fact]
+    public async Task Rss_without_cat_lists_both_profiles()
+    {
+        await Seed(null, Hit("AAAAAAAAAAAAAAAAAAAAAA", "Older book", ageMinutes: 20));
+        await SeedMusic(null, MusicHit("MMMMMMMMMMMMMMMMMMMMMM", "Radiohead - OK Computer (1997) [FLAC]", ageMinutes: 5));
+        using var client = _factory.CreateClient();
+
+        var doc = await Xml(await client.GetAsync("/newznab/api?t=search"));
+
+        doc.Descendants("item").Select(i => i.Element("title")!.Value)
+            .ShouldBe(["Radiohead - OK Computer (1997) [FLAC]", "Older book"]);
+
+        var music = await Xml(await client.GetAsync("/newznab/api?t=music&cat=3000"));
+        music.Descendants("item").Select(i => i.Element("title")!.Value).ShouldBe(["Radiohead - OK Computer (1997) [FLAC]"]);
     }
 
     [Fact]

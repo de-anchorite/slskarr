@@ -96,7 +96,7 @@ public static class Pages
     private static async Task<IResult> ReleaseAsync(string hitId, IDbContextFactory<SlskarrDb> dbFactory, CancellationToken ct)
     {
         await using var db = await dbFactory.CreateDbContextAsync(ct);
-        var hit = await db.Hits.AsNoTracking().SingleOrDefaultAsync(x => x.Id == hitId, ct);
+        var hit = await db.Hits.AsNoTracking().Include(x => x.Files).SingleOrDefaultAsync(x => x.Id == hitId, ct);
         if (hit is null)
         {
             return Results.NotFound();
@@ -120,6 +120,23 @@ public static class Pages
         Row(h, "Search key", hit.SearchKey);
         Row(h, "Seen at", Iso(hit.SeenAt));
         Row(h, "Rank", hit.Rank.ToString(CultureInfo.InvariantCulture));
+        h.Raw("</table><h2>Files</h2><table><tr><th>File</th><th>Size (bytes)</th><th>Audio</th><th>Length</th></tr>");
+        if (hit.Files.Count == 0)
+        {
+            Row(h, LastSegment(hit.RemotePath), hit.Size.ToString(CultureInfo.InvariantCulture), "", "");
+        }
+
+        foreach (var f in hit.Files.OrderBy(f => f.Subdir, StringComparer.Ordinal).ThenBy(f => f.RemotePath, StringComparer.Ordinal))
+        {
+            var name = LastSegment(f.RemotePath);
+            Row(
+                h,
+                f.Subdir.Length > 0 ? $"{f.Subdir}/{name}" : name,
+                f.Size.ToString(CultureInfo.InvariantCulture),
+                AudioDetail(f),
+                f.LengthSeconds is { } len ? $"{len / 60}:{len % 60:D2}" : "");
+        }
+
         h.Raw("</table><h2>Jobs</h2><table><tr><th>nzo_id</th><th>State</th><th>Failure</th></tr>");
         foreach (var j in jobs)
         {
@@ -129,6 +146,13 @@ public static class Pages
         h.Raw("</table>");
         return Page("Release", h);
     }
+
+    private static string LastSegment(string path) => path[(path.LastIndexOfAny(['\\', '/']) + 1)..];
+
+    private static string AudioDetail(HitFileEntity f) =>
+        f.BitDepth is { } depth && f.SampleRate is { } rate
+            ? $"{depth.ToString(CultureInfo.InvariantCulture)}-bit / {rate.ToString(CultureInfo.InvariantCulture)} Hz"
+            : f.BitRate is { } kbps ? $"{kbps.ToString(CultureInfo.InvariantCulture)} kbps" : "";
 
     private static string Iso(DateTimeOffset t) => t.UtcDateTime.ToString("yyyy-MM-dd'T'HH:mm:ss'Z'", CultureInfo.InvariantCulture);
 

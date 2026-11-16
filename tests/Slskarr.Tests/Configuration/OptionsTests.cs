@@ -59,7 +59,30 @@ public class OptionsTests
         o.Ebook.Extensions.ShouldBe(["epub", "azw3", "azw", "mobi", "pdf", "fb2", "djvu", "cbz", "cbr"]);
         o.Ebook.FormatPreference.ShouldBe(["epub", "azw3", "mobi", "azw", "pdf", "fb2", "djvu", "cbz", "cbr"]);
         o.ApiKey.ShouldBeNull();
+        o.Music.SabCategory.ShouldBe("music");
+        o.Music.MinSizeBytes.ShouldBeNull();
+        o.Music.MaxSizeBytes.ShouldBeNull();
+        o.Music.Ranking.ShouldBe(["NameMatch", "FreeSlot", "QueueLength", "UploadSpeed", "Format"]);
+        o.Music.Extensions.ShouldBe(["flac", "mp3", "m4a", "aac", "ogg", "opus", "wav", "aiff", "aif", "ape", "wv", "alac"]);
+        o.Music.FormatPreference.ShouldBe(["flac", "mp3", "m4a", "alac", "ogg", "opus", "aac", "wav", "aiff", "aif", "ape", "wv"]);
     }
+
+    [Fact]
+    public void Music_options_configured_arrays_replace_defaults()
+    {
+        var o = Resolve(Valid(
+            ("Slskarr:Music:Extensions:0", ".FLAC"),
+            ("Slskarr:Music:FormatPreference:0", "mp3"),
+            ("Slskarr:Music:Ranking:0", "Format")));
+
+        o.Music.Extensions.ShouldBe(["flac"]);
+        o.Music.FormatPreference.ShouldBe(["mp3"]);
+        o.Music.Ranking.ShouldBe(["Format"]);
+    }
+
+    [Fact]
+    public void Music_options_reject_unknown_ranking_criterion() =>
+        Should.Throw<OptionsValidationException>(() => Resolve(Valid(("Slskarr:Music:Ranking:0", "Foo")))).Message.ShouldContain("Slskarr:Music:Ranking");
 
     [Fact]
     public void Options_configured_arrays_replace_defaults()

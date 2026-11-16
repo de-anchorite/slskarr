@@ -75,10 +75,11 @@ public sealed class SabnzbdContractTests : IDisposable
         var id = Guid.NewGuid();
         var job = new DownloadJobEntity
         {
-            Id = id, BatchId = id, HitId = "h" + id.ToString("N"), Category = category, Title = title, Username = "peer",
+            Id = id, HitId = "h" + id.ToString("N"), Category = category, Title = title, Username = "peer",
             RemotePath = DownloadHarness.RemotePath, Size = 2_097_152, State = state, BytesDone = bytesDone,
             CreatedAt = _factory.Time.GetUtcNow(), LastProgressAt = _factory.Time.GetUtcNow(),
             CompletedAt = completedAt, FailMessage = fail, StoragePath = storage,
+            Files = [new JobFileEntity { RemotePath = DownloadHarness.RemotePath, Size = 2_097_152, BatchId = id, State = state, BytesDone = bytesDone }],
         };
         db.DownloadJobs.Add(job);
         await db.SaveChangesAsync();

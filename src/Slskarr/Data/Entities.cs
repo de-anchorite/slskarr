@@ -38,6 +38,32 @@ public sealed class HitEntity
     public int Rank { get; set; }
 
     public DateTimeOffset SeenAt { get; set; }
+
+    public List<HitFileEntity> Files { get; set; } = [];
+}
+
+/// <summary>One file of a release. <see cref="Subdir"/> is empty or a disc folder name (<c>CD1</c>).</summary>
+public sealed class HitFileEntity
+{
+    public int Id { get; set; }
+
+    public required string HitId { get; set; }
+
+    public required string RemotePath { get; set; }
+
+    public long Size { get; set; }
+
+    public string Subdir { get; set; } = "";
+
+    public int? BitRate { get; set; }
+
+    public int? BitDepth { get; set; }
+
+    public int? SampleRate { get; set; }
+
+    public int? LengthSeconds { get; set; }
+
+    public bool? IsVbr { get; set; }
 }
 
 public sealed class SearchJobEntity
@@ -63,12 +89,13 @@ public sealed class SearchJobEntity
     public string? Error { get; set; }
 }
 
-/// <summary>A queued download. <see cref="BatchId"/> is the slskd batch id (a retry needs a fresh one); nzo_id is <c>"SLSKARR_" + Id:N</c>.</summary>
+/// <summary>
+/// A queued download; nzo_id is <c>"SLSKARR_" + Id:N</c>. Size, BytesDone and PlaceInQueue are aggregates over
+/// <see cref="Files"/>, which carry the slskd batch ids (a retry needs fresh ones).
+/// </summary>
 public sealed class DownloadJobEntity
 {
     public Guid Id { get; set; }
-
-    public Guid BatchId { get; set; }
 
     public required string HitId { get; set; }
 
@@ -90,13 +117,40 @@ public sealed class DownloadJobEntity
 
     public DateTimeOffset LastProgressAt { get; set; }
 
+    /// <summary>When the job's transfers were last (re)enqueued (add or retry); the monitor's add grace counts from here.</summary>
+    public DateTimeOffset EnqueuedAt { get; set; }
+
     public DateTimeOffset CreatedAt { get; set; }
 
     public DateTimeOffset? CompletedAt { get; set; }
 
     public string? FailMessage { get; set; }
 
+    public string? StoragePath { get; set; }
+
+    public List<JobFileEntity> Files { get; set; } = [];
+}
+
+/// <summary><see cref="BatchId"/> is the slskd batch id: one batch per <see cref="Subdir"/>.</summary>
+public sealed class JobFileEntity
+{
+    public int Id { get; set; }
+
+    public Guid JobId { get; set; }
+
+    public required string RemotePath { get; set; }
+
+    public long Size { get; set; }
+
+    public string Subdir { get; set; } = "";
+
+    public Guid BatchId { get; set; }
+
     public Guid? SlskdTransferId { get; set; }
 
-    public string? StoragePath { get; set; }
+    public DownloadState State { get; set; }
+
+    public long BytesDone { get; set; }
+
+    public int? PlaceInQueue { get; set; }
 }

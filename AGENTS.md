@@ -5,13 +5,13 @@ Soulseek network via [slskd](https://github.com/slskd/slskd). It presents itself
 an **indexer** and a **download client** by emulating existing, well-known API contracts, so no *arr
 plugin is needed.
 
-> Status: v1 ebook implementation (Chaptarr/Readarr) is built and covered by unit and in-process
-> integration tests. Pre-release: the manual checklist against real slskd/Chaptarr/Prowlarr is pending
+> Status: v1 ebook (Chaptarr/Readarr) and music (Lidarr) implementations are built and covered by unit and in-process
+> integration tests. Pre-release: the manual checklist against real slskd/Chaptarr/Lidarr/Prowlarr is pending
 > (see README).
 
 ## Design (v1)
 
-- Indexer face: **Newznab** API (`t=caps`, `search`, `book`), RSS/XML output. `tvsearch`, `movie` and `music` are not implemented yet.
+- Indexer face: **Newznab** API (`t=caps`, `search`, `book`, `music`), RSS/XML output. `music` is the Lidarr album search (`q`, `artist`, `album`; categories 3000/3010/3040). `tvsearch` and `movie` are not implemented yet.
 - Download client face: **SABnzbd** API (`mode=version|get_config|fullstatus|addfile|queue|history|retry`).
 - The "NZB" handed out is a stub carrying a Slskarr release ID. *arr validation requires
   well-formed XML, root `<nzb>`, and at least one `<file>` element.

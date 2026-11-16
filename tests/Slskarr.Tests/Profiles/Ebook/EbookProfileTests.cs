@@ -117,4 +117,15 @@ public class EbookProfileTests
     [Fact]
     public void Ranking_comes_from_options() =>
         Create().Ranking.ShouldBe(EbookProfileOptions.AllowedRankingCriteria);
+
+    [Fact]
+    public void Ebook_candidate_has_one_file()
+    {
+        var result = Create().ToCandidates([Response(new SlskdFile(@"a\b.epub", 2_000_000, "epub"))]);
+        var c = result.ShouldHaveSingleItem();
+        var f = c.Files.ShouldHaveSingleItem();
+        f.RemotePath.ShouldBe(c.RemotePath);
+        f.Subdir.ShouldBe("");
+        f.Size.ShouldBe(c.Size);
+    }
 }

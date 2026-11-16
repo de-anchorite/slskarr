@@ -8,6 +8,7 @@ using Slskarr.Downloads;
 using Slskarr.Newznab;
 using Slskarr.Profiles;
 using Slskarr.Profiles.Ebook;
+using Slskarr.Profiles.Music;
 using Slskarr.Sabnzbd;
 using Slskarr.Search;
 using Slskarr.Soulseek;
@@ -26,6 +27,7 @@ builder.Services.TryAddSingleton(TimeProvider.System);
 builder.Services.AddSlskarrData();
 builder.Services.AddSingleton<EbookNameParser>();
 builder.Services.AddSingleton<IMediaProfile, EbookProfile>();
+builder.Services.AddSingleton<IMediaProfile, MusicProfile>();
 builder.Services.AddSingleton<ProfileRegistry>();
 builder.Services.AddHttpClient<ISlskdClient, SlskdClient>("slskd", (sp, client) =>
     SlskdClient.Configure(client, sp.GetRequiredService<IOptions<SlskarrOptions>>().Value.Slskd));

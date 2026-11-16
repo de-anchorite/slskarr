@@ -33,6 +33,26 @@ public static class OptionsValidation
         {
             ebook.Ranking = [.. EbookProfileOptions.AllowedRankingCriteria];
         }
+
+        ApplyMusicDefaults(options.Music);
+    }
+
+    private static void ApplyMusicDefaults(MusicProfileOptions music)
+    {
+        music.Extensions = NormaliseExtensions(music.Extensions);
+        music.FormatPreference = NormaliseExtensions(music.FormatPreference);
+        if (music.Extensions.Length == 0)
+        {
+            music.Extensions = [.. MusicProfileOptions.DefaultExtensions];
+        }
+        if (music.FormatPreference.Length == 0)
+        {
+            music.FormatPreference = [.. MusicProfileOptions.DefaultFormatPreference];
+        }
+        if (music.Ranking.Length == 0)
+        {
+            music.Ranking = [.. EbookProfileOptions.AllowedRankingCriteria];
+        }
     }
 
     private static string[] NormaliseExtensions(string[] extensions) =>
@@ -72,6 +92,16 @@ public sealed class SlskarrOptionsValidator : IValidateOptions<SlskarrOptions>
         {
             failures.Add(
                 $"Slskarr:Ebook:Ranking contains unknown criteria ({string.Join(", ", unknown)}). " +
+                $"Allowed: {string.Join(", ", EbookProfileOptions.AllowedRankingCriteria)}.");
+        }
+
+        var unknownMusic = options.Music.Ranking
+            .Where(c => !EbookProfileOptions.AllowedRankingCriteria.Contains(c, StringComparer.Ordinal))
+            .ToList();
+        if (unknownMusic.Count > 0)
+        {
+            failures.Add(
+                $"Slskarr:Music:Ranking contains unknown criteria ({string.Join(", ", unknownMusic)}). " +
                 $"Allowed: {string.Join(", ", EbookProfileOptions.AllowedRankingCriteria)}.");
         }
 

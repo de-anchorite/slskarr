@@ -23,9 +23,6 @@ namespace Slskarr.Data.Migrations
                         .ValueGeneratedOnAdd()
                         .HasColumnType("TEXT");
 
-                    b.Property<Guid>("BatchId")
-                        .HasColumnType("TEXT");
-
                     b.Property<long>("BytesDone")
                         .HasColumnType("INTEGER");
 
@@ -37,6 +34,9 @@ namespace Slskarr.Data.Migrations
                         .HasColumnType("INTEGER");
 
                     b.Property<long>("CreatedAt")
+                        .HasColumnType("INTEGER");
+
+                    b.Property<long>("EnqueuedAt")
                         .HasColumnType("INTEGER");
 
                     b.Property<string>("FailMessage")
@@ -58,9 +58,6 @@ namespace Slskarr.Data.Migrations
 
                     b.Property<long>("Size")
                         .HasColumnType("INTEGER");
-
-                    b.Property<Guid?>("SlskdTransferId")
-                        .HasColumnType("TEXT");
 
                     b.Property<string>("State")
                         .IsRequired()
@@ -146,10 +143,98 @@ namespace Slskarr.Data.Migrations
 
                     b.HasIndex("SeenAt");
 
-                    b.HasIndex("SearchKey", "Username", "RemotePath")
+                    b.HasIndex("SearchKey", "Username", "RemotePath", "Format")
                         .IsUnique();
 
                     b.ToTable("Hits");
+                });
+
+            modelBuilder.Entity("Slskarr.Data.HitFileEntity", b =>
+                {
+                    b.Property<int>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("INTEGER");
+
+                    b.Property<int?>("BitDepth")
+                        .HasColumnType("INTEGER");
+
+                    b.Property<int?>("BitRate")
+                        .HasColumnType("INTEGER");
+
+                    b.Property<string>("HitId")
+                        .IsRequired()
+                        .HasColumnType("TEXT");
+
+                    b.Property<bool?>("IsVbr")
+                        .HasColumnType("INTEGER");
+
+                    b.Property<int?>("LengthSeconds")
+                        .HasColumnType("INTEGER");
+
+                    b.Property<string>("RemotePath")
+                        .IsRequired()
+                        .HasColumnType("TEXT");
+
+                    b.Property<int?>("SampleRate")
+                        .HasColumnType("INTEGER");
+
+                    b.Property<long>("Size")
+                        .HasColumnType("INTEGER");
+
+                    b.Property<string>("Subdir")
+                        .IsRequired()
+                        .HasColumnType("TEXT");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("HitId", "RemotePath")
+                        .IsUnique();
+
+                    b.ToTable("HitFiles");
+                });
+
+            modelBuilder.Entity("Slskarr.Data.JobFileEntity", b =>
+                {
+                    b.Property<int>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("INTEGER");
+
+                    b.Property<Guid>("BatchId")
+                        .HasColumnType("TEXT");
+
+                    b.Property<long>("BytesDone")
+                        .HasColumnType("INTEGER");
+
+                    b.Property<Guid>("JobId")
+                        .HasColumnType("TEXT");
+
+                    b.Property<int?>("PlaceInQueue")
+                        .HasColumnType("INTEGER");
+
+                    b.Property<string>("RemotePath")
+                        .IsRequired()
+                        .HasColumnType("TEXT");
+
+                    b.Property<long>("Size")
+                        .HasColumnType("INTEGER");
+
+                    b.Property<Guid?>("SlskdTransferId")
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("State")
+                        .IsRequired()
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("Subdir")
+                        .IsRequired()
+                        .HasColumnType("TEXT");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("JobId", "RemotePath")
+                        .IsUnique();
+
+                    b.ToTable("JobFiles");
                 });
 
             modelBuilder.Entity("Slskarr.Data.SearchJobEntity", b =>
@@ -193,6 +278,34 @@ namespace Slskarr.Data.Migrations
                     b.HasIndex("State");
 
                     b.ToTable("SearchJobs");
+                });
+
+            modelBuilder.Entity("Slskarr.Data.HitFileEntity", b =>
+                {
+                    b.HasOne("Slskarr.Data.HitEntity", null)
+                        .WithMany("Files")
+                        .HasForeignKey("HitId")
+                        .OnDelete(DeleteBehavior.Cascade)
+                        .IsRequired();
+                });
+
+            modelBuilder.Entity("Slskarr.Data.JobFileEntity", b =>
+                {
+                    b.HasOne("Slskarr.Data.DownloadJobEntity", null)
+                        .WithMany("Files")
+                        .HasForeignKey("JobId")
+                        .OnDelete(DeleteBehavior.Cascade)
+                        .IsRequired();
+                });
+
+            modelBuilder.Entity("Slskarr.Data.DownloadJobEntity", b =>
+                {
+                    b.Navigation("Files");
+                });
+
+            modelBuilder.Entity("Slskarr.Data.HitEntity", b =>
+                {
+                    b.Navigation("Files");
                 });
 #pragma warning restore 612, 618
         }

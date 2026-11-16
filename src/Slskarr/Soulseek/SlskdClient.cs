@@ -63,13 +63,13 @@ public sealed class SlskdClient(HttpClient http, TimeProvider time) : ISlskdClie
     }
 
     public async Task<SlskdEnqueueResult> EnqueueBatchAsync(
-        Guid batchId, string username, string remotePath, long size, string destination, CancellationToken ct)
+        Guid batchId, string username, IReadOnlyList<SlskdEnqueueFile> files, string destination, CancellationToken ct)
     {
         var body = new
         {
             id = batchId,
             username,
-            files = new[] { new { filename = remotePath, size } },
+            files = files.Select(f => new { filename = f.Filename, size = f.Size }).ToArray(),
             options = new { destination },
         };
 

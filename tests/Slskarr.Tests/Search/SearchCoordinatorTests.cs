@@ -43,6 +43,51 @@ public sealed class SearchCoordinatorTests : IDisposable
         _h.Jobs().Count.ShouldBe(1);
     }
 
+    // Review focus: an artist-only request must not be served by (or coalesced onto) the artist+album job.
+    [Fact]
+    public async Task Artist_search_after_album_search_searches_again()
+    {
+        var album = new SearchRequest(null, null, null, [3000], "Radiohead", "OK Computer", "music");
+        var artist = new SearchRequest(null, null, null, [3000], "Radiohead", null, "music");
+        (await _h.SearchAndRun(album, _h.Music)).ShouldBeEmpty();
+        _h.Jobs().Single().State.ShouldBe(SearchJobState.Done);
+
+        _h.Time.Advance(TimeSpan.FromMinutes(5)); // past the throttle gap
+        (await _h.SearchAndRun(artist, _h.Music)).ShouldBeEmpty();
+
+        _h.Slskd.StartedTexts.ShouldBe(["Radiohead OK Computer", "Radiohead"]);
+        _h.Jobs().Select(j => j.Key).Order().ShouldBe([SearchKey.For(_h.Music, album).Value, SearchKey.For(_h.Music, artist).Value]);
+    }
+
+    // Lidarr tier 2 (t=search&q=) arriving while the tier-1 (t=music) search is still running in slskd.
+    [Fact]
+    public async Task Lidarr_tier2_waits_on_running_tier1_job()
+    {
+        var h = Use(o => o.SlskdSearchTimeoutSeconds = 60);
+        h.Slskd.CompleteAfter = TimeSpan.FromSeconds(30);
+        var tier1 = new SearchRequest(null, null, null, [3000, 3010, 3040], "Radiohead", "OK Computer", "music");
+        var tier2 = new SearchRequest("Radiohead OK Computer", null, null, [3000, 3010, 3040], Function: "search");
+        var key = SearchKey.For(h.Music, tier1).Value;
+
+        var first = h.Coordinator.SearchAsync(tier1, CancellationToken.None);
+        await h.UntilQueued(key);
+        var run = h.Worker.RunOnceAsync(CancellationToken.None);
+        await SearchHarness.Until(() => h.Jobs().Single().State == SearchJobState.Running && h.Slskd.StartedTexts.Count == 1, "tier 1 running");
+
+        var second = h.Coordinator.SearchAsync(tier2, CancellationToken.None);
+        await Task.Delay(50); // let tier 2 reach its decision; it must not re-queue the running job
+        h.Jobs().Single().State.ShouldBe(SearchJobState.Running);
+        second.IsCompleted.ShouldBeFalse();
+        await h.AdvanceUntil(() => run.IsCompleted && first.IsCompleted && second.IsCompleted, stopAt: TimeSpan.FromMinutes(2));
+
+        (await run.Within()).ShouldBeTrue();
+        await first.Within();
+        await second.Within();
+        h.Slskd.StartedTexts.ShouldBe(["Radiohead OK Computer"]);
+        h.Jobs().Select(j => j.Key).ShouldBe([key]);
+        h.Jobs().Single().State.ShouldBe(SearchJobState.Done);
+    }
+
     [Fact]
     public async Task Cached_result_returned_without_search()
     {
@@ -263,6 +308,24 @@ public sealed class SearchCoordinatorTests : IDisposable
         (await _h.Worker.RunOnceAsync(CancellationToken.None)).ShouldBeFalse();
 
         _h.Hits().Select(h => h.Id).ShouldBe(["downloading", "fresh"], ignoreOrder: true);
+        await using var check = await _h.Db.CreateDbContextAsync();
+        check.HitFiles.Select(f => f.HitId).ShouldBe(["downloading", "fresh"], ignoreOrder: true); // cascaded
+    }
+
+    // Root cause of a flaky SABnzbd test: hits seeded by the download helpers had SeenAt = year 1, so the
+    // factory's worker could prune them mid-test.
+    [Fact]
+    public async Task Download_harness_hits_survive_the_first_retention_prune()
+    {
+        await using (var db = await _h.Db.CreateDbContextAsync())
+        {
+            db.Hits.Add(Slskarr.Tests.Downloads.DownloadHarness.NewHit("seeded"));
+            await db.SaveChangesAsync();
+        }
+
+        (await _h.Worker.RunOnceAsync(CancellationToken.None)).ShouldBeFalse();
+
+        _h.Hits().Select(h => h.Id).ShouldBe(["seeded"]);
     }
 
     [Fact]
@@ -359,6 +422,7 @@ public sealed class SearchCoordinatorTests : IDisposable
         ReleaseTitle = id,
         Format = "EPUB",
         SeenAt = seenAt,
+        Files = [new HitFileEntity { HitId = id, RemotePath = $@"@@abcde\{id}.epub" }],
     };
 
     private static DownloadJobEntity Download(string hitId, DownloadState state) => new()

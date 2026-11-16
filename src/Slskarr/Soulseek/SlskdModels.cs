@@ -1,6 +1,16 @@
 namespace Slskarr.Soulseek;
 
-public sealed record SlskdFile(string Filename, long Size, string? Extension);
+public sealed record SlskdFile(
+    string Filename,
+    long Size,
+    string? Extension,
+    int? BitRate = null,
+    int? BitDepth = null,
+    int? SampleRate = null,
+    int? Length = null,
+    bool? IsVariableBitRate = null);
+
+public sealed record SlskdEnqueueFile(string Filename, long Size);
 
 public sealed record SlskdSearchResponse(
     string Username,
