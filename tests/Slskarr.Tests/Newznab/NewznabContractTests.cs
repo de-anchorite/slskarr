@@ -220,6 +220,30 @@ public sealed class NewznabContractTests : IDisposable
         check.SearchJobs.Single().QueryText.ShouldBe("Weezer");
     }
 
+    // Lidarr's artist search: t=music with an empty q and only artist= is a search, not an RSS poll.
+    [Fact]
+    public async Task Lidarr_artist_only_request_searches()
+    {
+        var slskd = new Slskarr.Tests.Search.FakeSearchSlskd(TimeProvider.System);
+        using var factory = new SlskarrFactory().WithServices(s => s.AddSingleton<Slskarr.Soulseek.ISlskdClient>(slskd));
+        using var client = factory.CreateClient();
+
+        var request = client.GetAsync("/newznab/api?t=music&cat=3000,3010,3040&extended=1&offset=0&limit=100&q=&artist=Radiohead");
+        var deadline = DateTime.UtcNow.AddSeconds(10);
+        while (!request.IsCompleted && DateTime.UtcNow < deadline)
+        {
+            factory.Time.Advance(TimeSpan.FromSeconds(1));
+            await Task.Delay(5);
+        }
+
+        var doc = await Xml(await request.WaitAsync(TimeSpan.FromSeconds(1)));
+        doc.Descendants("item").Select(i => i.Element("guid")!.Value).ShouldNotContain(NewznabPlaceholder.Id);
+        slskd.StartedTexts.ShouldBe(["Radiohead"]);
+        var dbf = factory.Services.GetRequiredService<IDbContextFactory<SlskarrDb>>();
+        await using var db = await dbf.CreateDbContextAsync();
+        db.SearchJobs.Select(j => j.Key).ShouldBe(["music:radiohead"]);
+    }
+
     [Fact]
     public async Task Music_rss_never_searches()
     {

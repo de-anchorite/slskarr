@@ -59,6 +59,35 @@ public sealed class SearchCoordinatorTests : IDisposable
         _h.Jobs().Select(j => j.Key).Order().ShouldBe([SearchKey.For(_h.Music, album).Value, SearchKey.For(_h.Music, artist).Value]);
     }
 
+    // Lidarr tier 2 (t=search&q=) arriving while the tier-1 (t=music) search is still running in slskd.
+    [Fact]
+    public async Task Lidarr_tier2_waits_on_running_tier1_job()
+    {
+        var h = Use(o => o.SlskdSearchTimeoutSeconds = 60);
+        h.Slskd.CompleteAfter = TimeSpan.FromSeconds(30);
+        var tier1 = new SearchRequest(null, null, null, [3000, 3010, 3040], "Radiohead", "OK Computer", "music");
+        var tier2 = new SearchRequest("Radiohead OK Computer", null, null, [3000, 3010, 3040], Function: "search");
+        var key = SearchKey.For(h.Music, tier1).Value;
+
+        var first = h.Coordinator.SearchAsync(tier1, CancellationToken.None);
+        await h.UntilQueued(key);
+        var run = h.Worker.RunOnceAsync(CancellationToken.None);
+        await SearchHarness.Until(() => h.Jobs().Single().State == SearchJobState.Running && h.Slskd.StartedTexts.Count == 1, "tier 1 running");
+
+        var second = h.Coordinator.SearchAsync(tier2, CancellationToken.None);
+        await Task.Delay(50); // let tier 2 reach its decision; it must not re-queue the running job
+        h.Jobs().Single().State.ShouldBe(SearchJobState.Running);
+        second.IsCompleted.ShouldBeFalse();
+        await h.AdvanceUntil(() => run.IsCompleted && first.IsCompleted && second.IsCompleted, stopAt: TimeSpan.FromMinutes(2));
+
+        (await run.Within()).ShouldBeTrue();
+        await first.Within();
+        await second.Within();
+        h.Slskd.StartedTexts.ShouldBe(["Radiohead OK Computer"]);
+        h.Jobs().Select(j => j.Key).ShouldBe([key]);
+        h.Jobs().Single().State.ShouldBe(SearchJobState.Done);
+    }
+
     [Fact]
     public async Task Cached_result_returned_without_search()
     {
