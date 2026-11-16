@@ -32,8 +32,8 @@ public sealed class DownloadMonitor(
     // When slskd first became unreachable for a job; the outage is not held against its stall clock.
     private readonly Dictionary<Guid, DateTimeOffset> _unreachableSince = [];
 
-    // Slskarr's own downtime is not held against a job's stall clock either: until a job's first poll in this
-    // process has been saved, its clock is moved up to the time this process started.
+    // Slskarr's own downtime is not held against a job's stall clock (or its add grace) either: until a job's first
+    // poll in this process has been saved, both are moved up to the time this process started.
     private readonly DateTimeOffset _startedAt = time.GetUtcNow();
     private readonly HashSet<Guid> _resumed = [];
 
@@ -109,9 +109,18 @@ public sealed class DownloadMonitor(
         }
 
         var now = time.GetUtcNow();
-        if (!_resumed.Contains(id) && job.LastProgressAt < _startedAt)
+        if (!_resumed.Contains(id))
         {
-            job.LastProgressAt = _startedAt;
+            if (job.LastProgressAt < _startedAt)
+            {
+                job.LastProgressAt = _startedAt;
+            }
+
+            // An add or retry in flight when Slskarr stopped gets its full add grace again.
+            if (job.EnqueuedAt < _startedAt)
+            {
+                job.EnqueuedAt = _startedAt;
+            }
         }
 
         // One poll per batch (disc folder); a file is matched to its transfer by remote path.

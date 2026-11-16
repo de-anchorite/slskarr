@@ -292,6 +292,28 @@ public sealed class DownloadMonitorTests : IDisposable
         _h.Job(job.Id).State.ShouldBe(DownloadState.Queued);
     }
 
+    // An enqueue in flight when Slskarr went down gets its add grace again after the restart.
+    [Fact]
+    public async Task Add_grace_restarts_with_the_process()
+    {
+        var job = await _h.AddJob();
+        _h.UpdateJob(job.Id, j => j.Files[0].SlskdTransferId = null);
+        _h.Slskd.Batches.Clear();
+
+        _h.Time.Advance(TimeSpan.FromHours(2)); // Slskarr was down
+        _h.RestartMonitor();
+        _h.Time.Advance(DownloadMonitor.AddGrace - TimeSpan.FromSeconds(1));
+        await _h.Poll();
+        _h.Job(job.Id).State.ShouldBe(DownloadState.Queued);
+        _h.Slskd.Cancels.ShouldBeEmpty();
+
+        _h.Time.Advance(TimeSpan.FromSeconds(2));
+        await _h.Poll();
+        var after = _h.Job(job.Id);
+        after.State.ShouldBe(DownloadState.Failed);
+        after.FailMessage.ShouldBe("Transfer disappeared from slskd");
+    }
+
     [Fact]
     public async Task Downtime_before_a_restart_is_not_counted_toward_stall()
     {
