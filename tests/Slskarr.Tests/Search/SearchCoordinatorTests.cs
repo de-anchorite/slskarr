@@ -308,6 +308,8 @@ public sealed class SearchCoordinatorTests : IDisposable
         (await _h.Worker.RunOnceAsync(CancellationToken.None)).ShouldBeFalse();
 
         _h.Hits().Select(h => h.Id).ShouldBe(["downloading", "fresh"], ignoreOrder: true);
+        await using var check = await _h.Db.CreateDbContextAsync();
+        check.HitFiles.Select(f => f.HitId).ShouldBe(["downloading", "fresh"], ignoreOrder: true); // cascaded
     }
 
     // Root cause of a flaky SABnzbd test: hits seeded by the download helpers had SeenAt = year 1, so the
@@ -420,6 +422,7 @@ public sealed class SearchCoordinatorTests : IDisposable
         ReleaseTitle = id,
         Format = "EPUB",
         SeenAt = seenAt,
+        Files = [new HitFileEntity { HitId = id, RemotePath = $@"@@abcde\{id}.epub" }],
     };
 
     private static DownloadJobEntity Download(string hitId, DownloadState state) => new()
