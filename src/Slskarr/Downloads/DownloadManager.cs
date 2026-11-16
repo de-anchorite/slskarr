@@ -135,9 +135,10 @@ public sealed class DownloadManager(
         {
             try
             {
-                var result = wasState == DownloadState.Completed
-                    ? await slskd.DeleteDownloadDirAsync(StoragePaths.JobDir(job.Id), ct)
-                    : await DeletePartialFilesAsync(db, job, ct);
+                // An unfinished album may already hold finished tracks in the job folder: it goes too.
+                var partials = wasState == DownloadState.Completed ? null : await DeletePartialFilesAsync(db, job, ct);
+                var dir = await slskd.DeleteDownloadDirAsync(StoragePaths.JobDir(job.Id), ct);
+                var result = partials is { } p && p != SlskdDeleteResult.Deleted ? p : dir;
                 if (result == SlskdDeleteResult.Forbidden && status.MarkRemoteDeleteForbidden())
                 {
                     logger.LogWarning("Enable remote_file_management in slskd to let Slskarr delete imported files");
@@ -174,7 +175,7 @@ public sealed class DownloadManager(
                 ct);
             if (shared)
             {
-                logger.LogInformation("Keeping the partial file of {Job}: another download uses it", job.Id);
+                logger.LogInformation("Keeping the partial file {File} of {Job}: another download uses it", file, job.Id);
                 continue;
             }
 
@@ -272,27 +273,38 @@ public sealed class DownloadManager(
             {
                 error = await EnqueueBatchAsync(job, batch);
             }
-            catch (SlskdUnavailableException)
+            catch (Exception ex)
             {
-                await RemoveTransfersAsync(job, enqueued, CancellationToken.None);
-                throw;
+                if (await RemoveTransfersAsync(job, enqueued, CancellationToken.None))
+                {
+                    throw;
+                }
+
+                // Earlier batches may still be queued in slskd: keep the job (Failed, transfer ids kept) so a
+                // later Delete/Retry can clean them up, rather than orphaning them.
+                logger.LogWarning(ex, "Enqueue of a later batch failed for {Job} and the earlier batches could not be removed", job.Id);
+                Fail(job, "slskd became unavailable while enqueuing; earlier parts of the release may still be queued in slskd");
+                return;
             }
 
             if (error is not null)
             {
                 await RemoveTransfersAsync(job, enqueued, CancellationToken.None);
-                job.State = DownloadState.Failed;
-                job.FailMessage = error;
-                foreach (var file in job.Files)
-                {
-                    file.State = DownloadState.Failed;
-                    file.SlskdTransferId = null;
-                }
-
+                Fail(job, error);
                 return;
             }
 
             enqueued.AddRange(batch);
+        }
+    }
+
+    private static void Fail(DownloadJobEntity job, string message)
+    {
+        job.State = DownloadState.Failed;
+        job.FailMessage = message;
+        foreach (var file in job.Files)
+        {
+            file.State = DownloadState.Failed;
         }
     }
 
@@ -375,10 +387,12 @@ public sealed class DownloadManager(
 
     /// <summary>
     /// Cancels and clears the slskd transfer records of the given files (404 is success). While the job is active,
-    /// a file with no recorded transfer is looked up in its batch. Never throws for slskd outages.
+    /// a file with no recorded transfer is looked up in its batch. Never throws for slskd outages; returns false
+    /// (keeping the transfer ids of the batches concerned) when removal could not be confirmed.
     /// </summary>
-    private async Task RemoveTransfersAsync(DownloadJobEntity job, IReadOnlyCollection<JobFileEntity> files, CancellationToken ct)
+    private async Task<bool> RemoveTransfersAsync(DownloadJobEntity job, IReadOnlyCollection<JobFileEntity> files, CancellationToken ct)
     {
+        var confirmed = true;
         var active = job.State is DownloadState.Queued or DownloadState.Downloading;
         foreach (var batch in files.GroupBy(f => f.BatchId))
         {
@@ -399,6 +413,8 @@ public sealed class DownloadManager(
             catch (SlskdUnavailableException ex)
             {
                 logger.LogWarning(ex, "slskd unreachable while removing transfers for {Job}", job.Id);
+                confirmed = false;
+                continue;
             }
 
             foreach (var file in batch)
@@ -406,6 +422,8 @@ public sealed class DownloadManager(
                 file.SlskdTransferId = null;
             }
         }
+
+        return confirmed;
     }
 
     private async Task<IReadOnlyList<DownloadJobEntity>> ListAsync(string? category, DownloadState[] states, CancellationToken ct)

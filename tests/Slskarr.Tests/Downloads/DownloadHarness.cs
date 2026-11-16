@@ -144,6 +144,14 @@ public sealed class FakeDownloadSlskd : ISlskdClient
 
     public bool EnqueueThrows { get; set; }
 
+    /// <summary>1-based number of the one enqueue call that throws <see cref="SlskdUnavailableException"/>.</summary>
+    public int? ThrowEnqueueNumber { get; set; }
+
+    /// <summary>1-based number of the one enqueue call that throws a non-slskd exception.</summary>
+    public int? ThrowOtherEnqueueNumber { get; set; }
+
+    public bool CancelThrows { get; set; }
+
     /// <summary>1-based number of the one enqueue call that is rejected with <see cref="EnqueueError"/>-style failure.</summary>
     public int? FailEnqueueNumber { get; set; }
 
@@ -174,13 +182,17 @@ public sealed class FakeDownloadSlskd : ISlskdClient
                 state, bytes, 0, null, null),
         ]);
 
+    private static SlskdBatch BatchOf(Guid batchId, IReadOnlyList<SlskdEnqueueFile> files) =>
+        new(batchId, "peer",
+            [.. files.Select(f => new SlskdTransfer(Guid.NewGuid(), batchId, "peer", f.Filename, f.Size, "Queued, Remotely", 0, 0, null, null))]);
+
     public async Task<SlskdEnqueueResult> EnqueueBatchAsync(
         Guid batchId, string username, IReadOnlyList<SlskdEnqueueFile> files, string destination, CancellationToken ct)
     {
         Enqueues.Add(new EnqueueCall(batchId, username, [.. files], destination));
-        if (BatchBeforeFailure is { } transfers)
+        if (BatchBeforeFailure is { } transfers && (ThrowEnqueueNumber is null || ThrowEnqueueNumber == Enqueues.Count))
         {
-            Batches[batchId] = transfers == 0 ? new SlskdBatch(batchId, "peer", []) : Batch(batchId, Guid.NewGuid(), "Queued, Remotely", 0);
+            Batches[batchId] = transfers == 0 ? new SlskdBatch(batchId, "peer", []) : BatchOf(batchId, files);
         }
 
         if (EnqueueGate is { } gate)
@@ -188,7 +200,12 @@ public sealed class FakeDownloadSlskd : ISlskdClient
             await gate.Task.WaitAsync(ct);
         }
 
-        if (EnqueueThrows)
+        if (ThrowOtherEnqueueNumber == Enqueues.Count)
+        {
+            throw new InvalidOperationException("boom");
+        }
+
+        if (EnqueueThrows || ThrowEnqueueNumber == Enqueues.Count)
         {
             throw new SlskdUnavailableException("down");
         }
@@ -205,8 +222,7 @@ public sealed class FakeDownloadSlskd : ISlskdClient
 
         if (!Batches.TryGetValue(batchId, out var batch) || batch.Transfers.Count == 0)
         {
-            batch = new SlskdBatch(batchId, "peer",
-                [.. files.Select(f => new SlskdTransfer(Guid.NewGuid(), batchId, "peer", f.Filename, f.Size, "Queued, Remotely", 0, 0, null, null))]);
+            batch = BatchOf(batchId, files);
             Batches[batchId] = batch;
         }
 
@@ -235,6 +251,11 @@ public sealed class FakeDownloadSlskd : ISlskdClient
 
     public Task CancelDownloadAsync(string username, Guid transferId, bool remove, CancellationToken ct)
     {
+        if (CancelThrows)
+        {
+            throw new SlskdUnavailableException("down");
+        }
+
         Cancels.Add((transferId, remove));
         Calls.Add("cancel");
         return Task.CompletedTask;
