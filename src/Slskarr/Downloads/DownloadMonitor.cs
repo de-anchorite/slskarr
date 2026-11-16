@@ -2,7 +2,6 @@ using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Options;
 using Slskarr.Configuration;
 using Slskarr.Data;
-using Slskarr.Profiles;
 using Slskarr.Soulseek;
 
 namespace Slskarr.Downloads;
@@ -17,7 +16,6 @@ public sealed class DownloadMonitor(
     IDbContextFactory<SlskarrDb> dbFactory,
     ISlskdClient slskd,
     IOptions<SlskarrOptions> options,
-    ProfileRegistry profiles,
     TimeProvider time,
     ILogger<DownloadMonitor> logger)
     : BackgroundService
@@ -222,7 +220,7 @@ public sealed class DownloadMonitor(
         {
             job.State = DownloadState.Completed;
             job.CompletedAt = now;
-            job.StoragePath = StoragePaths.Storage(_options.Slskd, _options.Paths, job.Id, StorageIsFolder(job) ? null : job.RemotePath);
+            job.StoragePath = StoragePaths.Storage(_options.Slskd, _options.Paths, job.Id, IsSingleFileRelease(job) ? job.RemotePath : null);
         }
         else
         {
@@ -283,7 +281,12 @@ public sealed class DownloadMonitor(
         return true;
     }
 
-    private bool StorageIsFolder(DownloadJobEntity job) => profiles.ForSabCategory(job.Category)?.StorageIsFolder ?? false;
+    /// <summary>
+    /// An ebook-shaped job (one file that is the release itself) is stored as that file; anything else (an album,
+    /// even one with a single track) as the job folder. Decided by the job, not its SAB category, which can change.
+    /// </summary>
+    private static bool IsSingleFileRelease(DownloadJobEntity job) =>
+        job.Files.Count == 1 && job.Files[0].RemotePath == job.RemotePath;
 
     /// <summary>
     /// A file with no recorded transfer may still be enqueueing: it has no transfer id and the job's latest

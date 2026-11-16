@@ -6,9 +6,6 @@ using Microsoft.Extensions.Time.Testing;
 using Slskarr.Configuration;
 using Slskarr.Data;
 using Slskarr.Downloads;
-using Slskarr.Profiles;
-using Slskarr.Profiles.Ebook;
-using Slskarr.Search;
 using Slskarr.Soulseek;
 
 namespace Slskarr.Tests.Downloads;
@@ -45,13 +42,10 @@ public sealed class DownloadHarness : IDisposable
         Slskd = new FakeDownloadSlskd();
         Status = new FileManagementStatus();
         Manager = new DownloadManager(Db, Slskd, Time, Status, NullLogger<DownloadManager>.Instance);
-        Monitor = new DownloadMonitor(Db, Slskd, Options, Registry, Time, NullLogger<DownloadMonitor>.Instance);
+        Monitor = new DownloadMonitor(Db, Slskd, Options, Time, NullLogger<DownloadMonitor>.Instance);
     }
 
     public const string MusicCategory = "music";
-
-    /// <summary>Ebook profile plus a stub whose releases are folders, as music's will be.</summary>
-    public ProfileRegistry Registry => new([new EbookProfile(Options, new EbookNameParser()), new FolderProfile()]);
 
     public FakeTimeProvider Time { get; } = new(Start);
 
@@ -69,7 +63,7 @@ public sealed class DownloadHarness : IDisposable
 
     /// <summary>Simulates a process restart for the monitor: a new instance, constructed at the current fake time.</summary>
     public void RestartMonitor() =>
-        Monitor = new DownloadMonitor(Db, Slskd, Options, Registry, Time, NullLogger<DownloadMonitor>.Instance);
+        Monitor = new DownloadMonitor(Db, Slskd, Options, Time, NullLogger<DownloadMonitor>.Instance);
 
     public const string IncompleteFile = "peer/Books/Frank Herbert/Frank Herbert - Dune (1965).epub";
 
@@ -384,22 +378,4 @@ public sealed class FakeDownloadSlskd : ISlskdClient
     public Task DeleteSearchAsync(Guid id, CancellationToken ct) => throw new NotSupportedException();
 
     public Task<string> GetVersionAsync(CancellationToken ct) => throw new NotSupportedException();
-}
-
-/// <summary>Minimal profile whose finished release is a folder.</summary>
-internal sealed class FolderProfile : IMediaProfile
-{
-    public string Name => "folder";
-    public IReadOnlyList<int> Categories => [3000];
-    public string SabCategory => DownloadHarness.MusicCategory;
-    public bool CoalesceBySuperset => false;
-    public NewznabCategory CapsCategory => new(1, "Stub", []);
-    public IReadOnlyList<int> ItemCategories(HitEntity hit) => [];
-    public IReadOnlyList<(string Name, string Value)> ItemAttributes(HitEntity hit) => [];
-    public bool StorageIsFolder => true;
-    public IReadOnlyList<string> Ranking => [];
-    public bool Handles(SearchRequest r) => false;
-    public string BuildQuery(SearchRequest r) => "";
-    public IReadOnlyList<ReleaseCandidate> ToCandidates(IEnumerable<SlskdSearchResponse> responses) => [];
-    public int FormatRank(string format) => 0;
 }

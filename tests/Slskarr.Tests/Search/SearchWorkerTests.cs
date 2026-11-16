@@ -18,7 +18,6 @@ public class SearchWorkerTests
     public NewznabCategory CapsCategory => new(1, "Stub", []);
     public IReadOnlyList<int> ItemCategories(HitEntity hit) => [];
     public IReadOnlyList<(string Name, string Value)> ItemAttributes(HitEntity hit) => [];
-    public bool StorageIsFolder => false;
         public IReadOnlyList<string> Ranking => [];
         public bool Handles(SearchRequest r) => true;
         public string BuildQuery(SearchRequest r) => r.Query ?? "x";

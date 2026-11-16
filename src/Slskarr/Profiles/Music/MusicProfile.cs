@@ -27,8 +27,6 @@ public sealed partial class MusicProfile(IOptions<SlskarrOptions> options) : IMe
 
     public string SabCategory => _options.SabCategory;
 
-    public bool StorageIsFolder => true;
-
     public bool CoalesceBySuperset => false;
 
     public NewznabCategory CapsCategory { get; } =

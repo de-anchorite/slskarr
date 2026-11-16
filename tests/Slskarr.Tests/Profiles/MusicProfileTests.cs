@@ -276,7 +276,6 @@ public class MusicProfileTests
     {
         var p = Create();
         p.Name.ShouldBe("music");
-        p.StorageIsFolder.ShouldBeTrue();
         p.CoalesceBySuperset.ShouldBeFalse();
         p.SabCategory.ShouldBe("music");
         p.CapsCategory.Id.ShouldBe(3000);

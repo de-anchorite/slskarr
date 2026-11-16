@@ -40,9 +40,6 @@ public interface IMediaProfile
 
     string SabCategory { get; }
 
-    /// <summary>True when a finished release is a folder (music), false when it is one file (ebooks).</summary>
-    bool StorageIsFolder { get; }
-
     /// <summary>True when a release may be hidden because a better release of the same work (a superset) exists.</summary>
     bool CoalesceBySuperset { get; }
 

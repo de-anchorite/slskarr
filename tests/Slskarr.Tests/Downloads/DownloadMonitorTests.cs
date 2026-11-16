@@ -508,6 +508,43 @@ public sealed class DownloadMonitorTests : IDisposable
         after.StoragePath.ShouldBe($"/downloads/slskarr/{job.Id:N}/Frank Herbert - Dune (1965).epub");
     }
 
+    // Storage shape comes from the job's files, not its SAB category (which the user can change in the *arr).
+    [Fact]
+    public async Task Album_in_ebooks_category_is_stored_as_folder()
+    {
+        var id = _h.AddAlbum("01.flac", "02.flac");
+        _h.UpdateJob(id, j => j.Category = "ebooks");
+        _h.SetAlbumFile("01.flac", "Completed, Succeeded", DownloadHarness.FileSize);
+        _h.SetAlbumFile("02.flac", "Completed, Succeeded", DownloadHarness.FileSize);
+
+        await _h.Poll();
+
+        _h.Job(id).StoragePath.ShouldBe($"/downloads/slskarr/{id:N}");
+    }
+
+    [Fact]
+    public async Task Single_track_album_is_stored_as_folder()
+    {
+        var id = _h.AddAlbum("01.flac");
+        _h.SetAlbumFile("01.flac", "Completed, Succeeded", DownloadHarness.FileSize);
+
+        await _h.Poll();
+
+        _h.Job(id).StoragePath.ShouldBe($"/downloads/slskarr/{id:N}");
+    }
+
+    [Fact]
+    public async Task Ebook_in_music_category_is_stored_as_file()
+    {
+        var job = await _h.AddJob();
+        _h.UpdateJob(job.Id, j => j.Category = DownloadHarness.MusicCategory);
+        _h.Slskd.SetTransfer(job.Files[0].BatchId, "Completed, Succeeded", DownloadHarness.FileSize);
+
+        await _h.Poll();
+
+        _h.Job(job.Id).StoragePath.ShouldBe($"/downloads/slskarr/{job.Id:N}/Frank Herbert - Dune (1965).epub");
+    }
+
     [Fact]
     public async Task Stall_with_cancel_failing_keeps_job_active_until_removal_works()
     {
