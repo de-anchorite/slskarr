@@ -112,7 +112,12 @@ public sealed class DownloadHarness : IDisposable
 
 public sealed class FakeDownloadSlskd : ISlskdClient
 {
-    public record EnqueueCall(Guid BatchId, string Username, string RemotePath, long Size, string Destination);
+    public record EnqueueCall(Guid BatchId, string Username, IReadOnlyList<SlskdEnqueueFile> Files, string Destination)
+    {
+        public string RemotePath => Files[0].Filename;
+
+        public long Size => Files[0].Size;
+    }
 
     public List<EnqueueCall> Enqueues { get; } = [];
 
@@ -138,6 +143,9 @@ public sealed class FakeDownloadSlskd : ISlskdClient
     public string? EnqueueError { get; set; }
 
     public bool EnqueueThrows { get; set; }
+
+    /// <summary>1-based number of the one enqueue call that is rejected with <see cref="EnqueueError"/>-style failure.</summary>
+    public int? FailEnqueueNumber { get; set; }
 
     public SlskdDeleteResult DeleteResult { get; set; } = SlskdDeleteResult.Deleted;
 
@@ -169,7 +177,7 @@ public sealed class FakeDownloadSlskd : ISlskdClient
     public async Task<SlskdEnqueueResult> EnqueueBatchAsync(
         Guid batchId, string username, IReadOnlyList<SlskdEnqueueFile> files, string destination, CancellationToken ct)
     {
-        Enqueues.Add(new EnqueueCall(batchId, username, files[0].Filename, files[0].Size, destination));
+        Enqueues.Add(new EnqueueCall(batchId, username, [.. files], destination));
         if (BatchBeforeFailure is { } transfers)
         {
             Batches[batchId] = transfers == 0 ? new SlskdBatch(batchId, "peer", []) : Batch(batchId, Guid.NewGuid(), "Queued, Remotely", 0);
@@ -185,6 +193,11 @@ public sealed class FakeDownloadSlskd : ISlskdClient
             throw new SlskdUnavailableException("down");
         }
 
+        if (FailEnqueueNumber == Enqueues.Count)
+        {
+            return new SlskdEnqueueResult(false, null, "rejected");
+        }
+
         if (EnqueueError is { } error)
         {
             return new SlskdEnqueueResult(false, null, error);
@@ -192,7 +205,8 @@ public sealed class FakeDownloadSlskd : ISlskdClient
 
         if (!Batches.TryGetValue(batchId, out var batch) || batch.Transfers.Count == 0)
         {
-            batch = Batch(batchId, Guid.NewGuid(), "Queued, Remotely", 0);
+            batch = new SlskdBatch(batchId, "peer",
+                [.. files.Select(f => new SlskdTransfer(Guid.NewGuid(), batchId, "peer", f.Filename, f.Size, "Queued, Remotely", 0, 0, null, null))]);
             Batches[batchId] = batch;
         }
 

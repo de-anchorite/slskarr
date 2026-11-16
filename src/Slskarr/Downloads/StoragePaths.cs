@@ -6,14 +6,21 @@ namespace Slskarr.Downloads;
 
 public static partial class StoragePaths
 {
-    /// <summary>Slskd destination (and files-API directory) for a job, relative to slskd's downloads dir.</summary>
-    public static string JobDir(Guid jobId) => "slskarr/" + jobId.ToString("N");
+    /// <summary>
+    /// Slskd destination (and files-API directory) for a job, relative to slskd's downloads dir; with a
+    /// <paramref name="subdir"/> (a disc folder) the destination of that sub-batch.
+    /// </summary>
+    public static string JobDir(Guid jobId, string subdir = "") =>
+        "slskarr/" + jobId.ToString("N") + (subdir.Length == 0 ? "" : "/" + subdir.Trim('/'));
 
-    /// <summary>Where the finished file lives on the *arr side: downloads dir + job dir + file name, prefix-rewritten.</summary>
-    public static string Storage(SlskdOptions slskd, PathOptions paths, Guid jobId, string remotePath)
+    /// <summary>
+    /// Where the finished release lives on the *arr side, prefix-rewritten: the job folder when
+    /// <paramref name="remoteFile"/> is null (music), else downloads dir + job dir + file name (ebooks).
+    /// </summary>
+    public static string Storage(SlskdOptions slskd, PathOptions paths, Guid jobId, string? remoteFile)
     {
-        var path = $"{slskd.DownloadsPath.TrimEnd('/')}/{JobDir(jobId)}/{SoulseekPath.FileName(remotePath)}";
-        return Rewrite(paths, path);
+        var dir = $"{slskd.DownloadsPath.TrimEnd('/')}/{JobDir(jobId)}";
+        return Rewrite(paths, remoteFile is null ? dir : $"{dir}/{SoulseekPath.FileName(remoteFile)}");
     }
 
     /// <summary>

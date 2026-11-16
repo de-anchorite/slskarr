@@ -36,6 +36,9 @@ public interface IMediaProfile
 
     string SabCategory { get; }
 
+    /// <summary>True when a finished release is a folder (music), false when it is one file (ebooks).</summary>
+    bool StorageIsFolder { get; }
+
     /// <summary>Ranking criteria, in priority order, handed to <see cref="Ranker"/>.</summary>
     IReadOnlyList<string> Ranking { get; }
 

@@ -14,6 +14,7 @@ public class SearchWorkerTests
         public string Name => "stub";
         public IReadOnlyList<int> Categories => [1];
         public string SabCategory => "stub";
+        public bool StorageIsFolder => false;
         public IReadOnlyList<string> Ranking => [];
         public bool Handles(SearchRequest r) => true;
         public string BuildQuery(SearchRequest r) => r.Query ?? "x";

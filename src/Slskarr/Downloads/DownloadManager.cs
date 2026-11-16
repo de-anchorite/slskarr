@@ -56,8 +56,14 @@ public sealed class DownloadManager(
                 return new AddResult(false, null, "Release expired or unknown");
             }
 
+            if (hit.Files.Count == 0)
+            {
+                return new AddResult(false, null, "Release has no files");
+            }
+
             var now = time.GetUtcNow();
             var id = Guid.NewGuid();
+            var batches = AssignBatches(hit.Files.Select(f => f.Subdir), id);
             var job = new DownloadJobEntity
             {
                 Id = id,
@@ -69,7 +75,7 @@ public sealed class DownloadManager(
                 Size = hit.Size,
                 Files = hit.Files.Select(f => new JobFileEntity
                 {
-                    RemotePath = f.RemotePath, Size = f.Size, Subdir = f.Subdir, BatchId = id, State = DownloadState.Queued,
+                    RemotePath = f.RemotePath, Size = f.Size, Subdir = f.Subdir, BatchId = batches[f.Subdir], State = DownloadState.Queued,
                 }).ToList(),
                 State = DownloadState.Queued,
                 LastProgressAt = now,
@@ -121,7 +127,7 @@ public sealed class DownloadManager(
         }
 
         var wasState = job.State;
-        await RemoveTransferAsync(job, ct);
+        await RemoveTransfersAsync(job, job.Files, ct);
         job.State = DownloadState.Deleted;
         await db.SaveChangesAsync(ct);
 
@@ -131,7 +137,7 @@ public sealed class DownloadManager(
             {
                 var result = wasState == DownloadState.Completed
                     ? await slskd.DeleteDownloadDirAsync(StoragePaths.JobDir(job.Id), ct)
-                    : await DeletePartialFileAsync(db, job, ct);
+                    : await DeletePartialFilesAsync(db, job, ct);
                 if (result == SlskdDeleteResult.Forbidden && status.MarkRemoteDeleteForbidden())
                 {
                     logger.LogWarning("Enable remote_file_management in slskd to let Slskarr delete imported files");
@@ -147,26 +153,39 @@ public sealed class DownloadManager(
     }
 
     /// <summary>
-    /// Deletes the job's partial file from slskd's incomplete directory. That directory is shared by everything
-    /// from the same peer folder, so only the one file goes, and not while another live job downloads the same file.
+    /// Deletes the partial file of every unfinished file of the job from slskd's incomplete directory. That
+    /// directory is shared by everything from the same peer folder, so only the job's own files go, and not
+    /// while another live job downloads the same file. Returns the first non-success result.
     /// </summary>
-    private async Task<SlskdDeleteResult?> DeletePartialFileAsync(SlskarrDb db, DownloadJobEntity job, CancellationToken ct)
+    private async Task<SlskdDeleteResult?> DeletePartialFilesAsync(SlskarrDb db, DownloadJobEntity job, CancellationToken ct)
     {
-        if (StoragePaths.IncompleteFile(job.Username, job.RemotePath) is not { } file)
+        SlskdDeleteResult? outcome = null;
+        foreach (var jobFile in job.Files.Where(f => f.State != DownloadState.Completed))
         {
-            return null;
+            if (StoragePaths.IncompleteFile(job.Username, jobFile.RemotePath) is not { } file)
+            {
+                continue;
+            }
+
+            var remotePath = jobFile.RemotePath;
+            var shared = await db.DownloadJobs.AnyAsync(
+                j => j.Id != job.Id && j.State != DownloadState.Deleted && j.Username == job.Username
+                    && j.Files.Any(f => f.RemotePath == remotePath),
+                ct);
+            if (shared)
+            {
+                logger.LogInformation("Keeping the partial file of {Job}: another download uses it", job.Id);
+                continue;
+            }
+
+            var result = await slskd.DeleteIncompleteFileAsync(file, ct);
+            if (result != SlskdDeleteResult.Deleted)
+            {
+                outcome ??= result;
+            }
         }
 
-        var shared = await db.DownloadJobs.AnyAsync(
-            j => j.Id != job.Id && j.State != DownloadState.Deleted && j.Username == job.Username && j.RemotePath == job.RemotePath,
-            ct);
-        if (shared)
-        {
-            logger.LogInformation("Keeping the partial file of {Job}: another download uses it", job.Id);
-            return null;
-        }
-
-        return await slskd.DeleteIncompleteFileAsync(file, ct);
+        return outcome;
     }
 
     public async Task<AddResult> RetryAsync(string nzoId, CancellationToken ct)
@@ -191,19 +210,28 @@ public sealed class DownloadManager(
                 return new AddResult(false, nzoId, "Only failed downloads can be retried");
             }
 
-            await RemoveTransferAsync(job, ct);
-            job.Files[0].BatchId = Guid.NewGuid();
+            if (job.Files.Count == 0)
+            {
+                return new AddResult(false, nzoId, "Download has no files");
+            }
+
+            await RemoveTransfersAsync(job, job.Files, ct);
+            var batches = AssignBatches(job.Files.Select(f => f.Subdir), Guid.NewGuid());
             job.State = DownloadState.Queued;
             job.BytesDone = 0;
             job.PlaceInQueue = null;
             job.LastProgressAt = time.GetUtcNow();
             job.CompletedAt = null;
             job.FailMessage = null;
-            job.Files[0].SlskdTransferId = null;
-            job.Files[0].State = DownloadState.Queued;
-            job.Files[0].BytesDone = 0;
-            job.Files[0].PlaceInQueue = null;
             job.StoragePath = null;
+            foreach (var file in job.Files)
+            {
+                file.BatchId = batches[file.Subdir];
+                file.SlskdTransferId = null;
+                file.State = DownloadState.Queued;
+                file.BytesDone = 0;
+                file.PlaceInQueue = null;
+            }
 
             // Throws, saving nothing (the job stays Failed), only when slskd has no batch for the retry.
             await EnqueueAsync(job);
@@ -216,14 +244,66 @@ public sealed class DownloadManager(
         }
     }
 
+    /// <summary>One batch id per distinct subdir (one slskd batch per disc folder); the first takes <paramref name="first"/>.</summary>
+    private static Dictionary<string, Guid> AssignBatches(IEnumerable<string> subdirs, Guid first)
+    {
+        var batches = new Dictionary<string, Guid>();
+        foreach (var subdir in subdirs)
+        {
+            batches.TryAdd(subdir, batches.Count == 0 ? first : Guid.NewGuid());
+        }
+
+        return batches;
+    }
+
     /// <summary>
-    /// Enqueues the job's batch and records the outcome on the (tracked) job; the caller saves. When the enqueue
-    /// breaks off (slskd unreachable or too slow), slskd may still have created the batch, and a second enqueue
-    /// would be refused as already in progress, so the batch is looked up: if slskd has it, the job stays Queued
-    /// (with no transfer yet if the batch is still empty, which the monitor's add grace settles). Throws
-    /// <see cref="SlskdUnavailableException"/> only when slskd has no such batch or cannot be asked.
+    /// Enqueues the job's batches one by one and records the outcome on the (tracked) job; the caller saves. A
+    /// rejected batch fails the whole job (job and file rows) after the batches enqueued before it are cancelled.
+    /// Throws <see cref="SlskdUnavailableException"/> (after the same clean-up) only when slskd has no such batch
+    /// or cannot be asked; see <see cref="EnqueueBatchAsync"/>.
     /// </summary>
     private async Task EnqueueAsync(DownloadJobEntity job)
+    {
+        var enqueued = new List<JobFileEntity>();
+        foreach (var batch in job.Files.GroupBy(f => f.BatchId).Select(g => g.ToList()))
+        {
+            string? error;
+            try
+            {
+                error = await EnqueueBatchAsync(job, batch);
+            }
+            catch (SlskdUnavailableException)
+            {
+                await RemoveTransfersAsync(job, enqueued, CancellationToken.None);
+                throw;
+            }
+
+            if (error is not null)
+            {
+                await RemoveTransfersAsync(job, enqueued, CancellationToken.None);
+                job.State = DownloadState.Failed;
+                job.FailMessage = error;
+                foreach (var file in job.Files)
+                {
+                    file.State = DownloadState.Failed;
+                    file.SlskdTransferId = null;
+                }
+
+                return;
+            }
+
+            enqueued.AddRange(batch);
+        }
+    }
+
+    /// <summary>
+    /// Enqueues one batch (one disc folder) and records the transfer ids on its files. Returns slskd's error, or
+    /// null. When the enqueue breaks off (slskd unreachable or too slow), slskd may still have created the batch,
+    /// and a second enqueue would be refused as already in progress, so the batch is looked up: if slskd has it,
+    /// the files stay Queued (with no transfer yet if the batch is still empty, which the monitor's add grace
+    /// settles). Throws <see cref="SlskdUnavailableException"/> only when slskd has no such batch or cannot be asked.
+    /// </summary>
+    private async Task<string?> EnqueueBatchAsync(DownloadJobEntity job, List<JobFileEntity> batch)
     {
         SlskdEnqueueResult result;
         using (var timeout = new CancellationTokenSource(EnqueueTimeout, time))
@@ -231,47 +311,58 @@ public sealed class DownloadManager(
             try
             {
                 result = await slskd.EnqueueBatchAsync(
-                    job.Files[0].BatchId, job.Username, [new SlskdEnqueueFile(job.RemotePath, job.Size)], StoragePaths.JobDir(job.Id), timeout.Token);
+                    batch[0].BatchId, job.Username, [.. batch.Select(f => new SlskdEnqueueFile(f.RemotePath, f.Size))],
+                    StoragePaths.JobDir(job.Id, batch[0].Subdir), timeout.Token);
             }
             catch (Exception ex) when (ex is SlskdUnavailableException
                 || (ex is OperationCanceledException && timeout.IsCancellationRequested))
             {
                 var unavailable = ex as SlskdUnavailableException
                     ?? new SlskdUnavailableException($"slskd did not answer the enqueue within {EnqueueTimeout}", ex);
-                if (!await AdoptBatchAsync(job))
+                if (!await AdoptBatchAsync(job, batch))
                 {
                     throw unavailable;
                 }
 
-                return;
+                return null;
             }
         }
 
         if (!result.Ok)
         {
-            job.State = DownloadState.Failed;
-            job.FailMessage = result.Error ?? "Enqueue failed";
-            return;
+            return result.Error ?? "Enqueue failed";
         }
 
-        job.Files[0].SlskdTransferId = result.Batch?.Transfers.FirstOrDefault()?.Id;
+        AssignTransfers(batch, result.Batch);
+        return null;
     }
 
-    /// <summary>After a broken-off enqueue: true (transfer id recorded, if any) when slskd has the job's batch.</summary>
-    private async Task<bool> AdoptBatchAsync(DownloadJobEntity job)
+    /// <summary>Records each file's transfer id, matched by file name (a lone file takes a lone transfer).</summary>
+    private static void AssignTransfers(List<JobFileEntity> batch, SlskdBatch? slskdBatch)
+    {
+        var transfers = slskdBatch?.Transfers ?? [];
+        foreach (var file in batch)
+        {
+            file.SlskdTransferId = (transfers.FirstOrDefault(t => t.Filename == file.RemotePath)
+                ?? (batch.Count == 1 ? transfers.FirstOrDefault() : null))?.Id;
+        }
+    }
+
+    /// <summary>After a broken-off enqueue: true (transfer ids recorded, if any) when slskd has the batch.</summary>
+    private async Task<bool> AdoptBatchAsync(DownloadJobEntity job, List<JobFileEntity> batch)
     {
         using var timeout = new CancellationTokenSource(ProbeTimeout, time);
         try
         {
-            var batch = await slskd.GetBatchAsync(job.Files[0].BatchId, timeout.Token);
-            if (batch is null)
+            var found = await slskd.GetBatchAsync(batch[0].BatchId, timeout.Token);
+            if (found is null)
             {
                 return false;
             }
 
-            job.Files[0].SlskdTransferId = batch.Transfers.FirstOrDefault()?.Id;
+            AssignTransfers(batch, found);
             logger.LogInformation("Enqueue for {Job} broke off but slskd has its batch ({Count} transfer(s)); keeping it",
-                job.Id, batch.Transfers.Count);
+                job.Id, found.Transfers.Count);
             return true;
         }
         catch (Exception ex) when (ex is SlskdUnavailableException
@@ -282,29 +373,39 @@ public sealed class DownloadManager(
         }
     }
 
-    /// <summary>Cancels and clears the job's slskd transfer record (404 is success). Never throws for slskd outages.</summary>
-    private async Task RemoveTransferAsync(DownloadJobEntity job, CancellationToken ct)
+    /// <summary>
+    /// Cancels and clears the slskd transfer records of the given files (404 is success). While the job is active,
+    /// a file with no recorded transfer is looked up in its batch. Never throws for slskd outages.
+    /// </summary>
+    private async Task RemoveTransfersAsync(DownloadJobEntity job, IReadOnlyCollection<JobFileEntity> files, CancellationToken ct)
     {
-        try
+        var active = job.State is DownloadState.Queued or DownloadState.Downloading;
+        foreach (var batch in files.GroupBy(f => f.BatchId))
         {
-            var transferId = job.Files[0].SlskdTransferId;
-            if (transferId is null && job.State is DownloadState.Queued or DownloadState.Downloading)
+            try
             {
-                var batch = await slskd.GetBatchAsync(job.Files[0].BatchId, ct);
-                transferId = batch?.Transfers.FirstOrDefault()?.Id;
+                var transferIds = batch.Select(f => f.SlskdTransferId).OfType<Guid>().ToList();
+                if (active && batch.Any(f => f.SlskdTransferId is null)
+                    && await slskd.GetBatchAsync(batch.Key, ct) is { } found)
+                {
+                    transferIds = [.. transferIds.Union(found.Transfers.Select(t => t.Id))];
+                }
+
+                foreach (var transferId in transferIds)
+                {
+                    await slskd.CancelDownloadAsync(job.Username, transferId, remove: true, ct);
+                }
+            }
+            catch (SlskdUnavailableException ex)
+            {
+                logger.LogWarning(ex, "slskd unreachable while removing transfers for {Job}", job.Id);
             }
 
-            if (transferId is { } tid)
+            foreach (var file in batch)
             {
-                await slskd.CancelDownloadAsync(job.Username, tid, remove: true, ct);
+                file.SlskdTransferId = null;
             }
         }
-        catch (SlskdUnavailableException ex)
-        {
-            logger.LogWarning(ex, "slskd unreachable while removing transfer for {Job}", job.Id);
-        }
-
-        job.Files[0].SlskdTransferId = null;
     }
 
     private async Task<IReadOnlyList<DownloadJobEntity>> ListAsync(string? category, DownloadState[] states, CancellationToken ct)

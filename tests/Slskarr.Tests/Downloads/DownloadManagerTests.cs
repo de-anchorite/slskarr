@@ -36,6 +36,116 @@ public sealed class DownloadManagerTests : IDisposable
         (await _h.Manager.ActiveAsync("other", CancellationToken.None)).ShouldBeEmpty();
     }
 
+    private const string Album = @"@@abcde\Music\A\Alb\";
+
+    private void AddAlbumHit(string id, params (string Path, string Subdir)[] files)
+    {
+        using var db = _h.Db.CreateDbContext();
+        var hit = DownloadHarness.NewHit(id);
+        hit.RemotePath = Album + id;
+        hit.Files = [.. files.Select(f => new HitFileEntity { HitId = id, RemotePath = Album + f.Path, Size = 100, Subdir = f.Subdir })];
+        hit.Size = 100 * files.Length;
+        db.Hits.Add(hit);
+        db.SaveChanges();
+    }
+
+    private DownloadJobEntity AddAlbum(string id) =>
+        _h.Job(DownloadManager.ParseNzoId(_h.Manager.AddAsync(id, "music", CancellationToken.None).GetAwaiter().GetResult().NzoId!)!.Value);
+
+    [Fact]
+    public void Add_two_disc_album_enqueues_one_batch_per_disc()
+    {
+        AddAlbumHit("alb", (@"CD1\01.flac", "CD1"), (@"CD2\01.flac", "CD2"));
+
+        var job = AddAlbum("alb");
+
+        var n = job.Id.ToString("N");
+        _h.Slskd.Enqueues.Select(e => e.Destination).ShouldBe([$"slskarr/{n}/CD1", $"slskarr/{n}/CD2"]);
+        _h.Slskd.Enqueues.ShouldAllBe(e => e.Files.Count == 1);
+        _h.Slskd.Enqueues[0].Files[0].Filename.ShouldBe(Album + @"CD1\01.flac");
+        _h.Slskd.Enqueues[1].Files[0].Filename.ShouldBe(Album + @"CD2\01.flac");
+        _h.Slskd.Enqueues[0].BatchId.ShouldNotBe(_h.Slskd.Enqueues[1].BatchId);
+        job.Files.Select(f => f.BatchId).Distinct().Count().ShouldBe(2);
+        job.Files.ShouldAllBe(f => f.SlskdTransferId != null);
+    }
+
+    [Fact]
+    public void Add_single_folder_album_enqueues_one_batch()
+    {
+        AddAlbumHit("alb", ("01.flac", ""), ("02.flac", ""), ("03.flac", ""));
+
+        var job = AddAlbum("alb");
+
+        var call = _h.Slskd.Enqueues.Single();
+        call.Destination.ShouldBe("slskarr/" + job.Id.ToString("N"));
+        call.Files.Count.ShouldBe(3);
+        job.Files.Select(f => f.SlskdTransferId).Distinct().Count().ShouldBe(3);
+    }
+
+    [Fact]
+    public void Add_fails_job_when_one_batch_rejected()
+    {
+        AddAlbumHit("alb", (@"CD1\01.flac", "CD1"), (@"CD2\01.flac", "CD2"));
+        _h.Slskd.FailEnqueueNumber = 2;
+
+        var job = AddAlbum("alb");
+
+        job.State.ShouldBe(DownloadState.Failed);
+        job.FailMessage.ShouldBe("rejected");
+        job.Files.ShouldAllBe(f => f.State == DownloadState.Failed && f.SlskdTransferId == null);
+        _h.Slskd.Cancels.Count.ShouldBe(1);
+        _h.Slskd.Cancels[0].Remove.ShouldBeTrue();
+        _h.Slskd.Cancels[0].TransferId.ShouldBe(_h.Slskd.TransferIdFor(_h.Slskd.Enqueues[0].BatchId));
+    }
+
+    [Fact]
+    public async Task Add_fails_cleanly_for_a_hit_without_files()
+    {
+        AddAlbumHit("empty");
+
+        var result = await _h.Manager.AddAsync("empty", "music", CancellationToken.None);
+
+        result.Ok.ShouldBeFalse();
+        result.Error.ShouldNotBeNullOrEmpty();
+        _h.Slskd.Enqueues.ShouldBeEmpty();
+    }
+
+    [Fact]
+    public async Task Delete_incomplete_album_deletes_each_partial()
+    {
+        AddAlbumHit("alb", (@"CD1\01.flac", "CD1"), (@"CD2\01.flac", "CD2"), (@"CD2\02.flac", "CD2"));
+        var job = AddAlbum("alb");
+        _h.UpdateJob(job.Id, j => j.Files.First(f => f.RemotePath.EndsWith(@"CD2\02.flac")).State = DownloadState.Completed);
+
+        (await _h.Manager.DeleteAsync(DownloadManager.NzoId(job.Id), true, CancellationToken.None)).ShouldBeTrue();
+
+        _h.Slskd.DeletedIncompleteFiles.ShouldBe(
+        [
+            "peer/Music/A/Alb/CD1/01.flac",
+            "peer/Music/A/Alb/CD2/01.flac",
+        ]);
+        _h.Slskd.Cancels.Count.ShouldBe(3);
+        _h.Slskd.DeletedDownloadDirs.ShouldBeEmpty();
+    }
+
+    [Fact]
+    public async Task Retry_reenqueues_every_file_in_fresh_batches()
+    {
+        AddAlbumHit("alb", (@"CD1\01.flac", "CD1"), (@"CD2\01.flac", "CD2"));
+        _h.Slskd.FailEnqueueNumber = 2;
+        var job = AddAlbum("alb");
+        _h.Slskd.FailEnqueueNumber = null;
+
+        (await _h.Manager.RetryAsync(DownloadManager.NzoId(job.Id), CancellationToken.None)).Ok.ShouldBeTrue();
+
+        var after = _h.Job(job.Id);
+        after.State.ShouldBe(DownloadState.Queued);
+        after.Files.ShouldAllBe(f => f.State == DownloadState.Queued && f.SlskdTransferId != null);
+        after.Files.Select(f => f.BatchId).Intersect(job.Files.Select(f => f.BatchId)).ShouldBeEmpty();
+        _h.Slskd.Enqueues.Skip(2).Select(e => e.Destination).ShouldBe(
+            ["slskarr/" + job.Id.ToString("N") + "/CD1", "slskarr/" + job.Id.ToString("N") + "/CD2"]);
+    }
+
     [Fact]
     public async Task Add_same_hit_twice_returns_existing_job()
     {
