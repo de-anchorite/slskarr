@@ -1,6 +1,6 @@
-# Example stack: slskd + Chaptarr + Slskarr.
-# The `downloads` volume is mounted at the SAME path (/downloads) in slskd and Chaptarr, so the
-# paths Slskarr reports (Slskarr__Slskd__DownloadsPath + file) are valid for Chaptarr. Slskarr itself
+# Example stack: slskd + Chaptarr + Lidarr + Slskarr.
+# The `downloads` volume is mounted at the SAME path (/downloads) in slskd, Chaptarr and Lidarr, so the
+# paths Slskarr reports (Slskarr__Slskd__DownloadsPath + file) are valid for both. Slskarr itself
 # never touches the files (it asks slskd to delete them), so it does not mount the volume.
 services:
   slskd:
@@ -46,9 +46,22 @@ services:
     ports:
       - "8789:8789"
 
+  lidarr:
+    image: lscr.io/linuxserver/lidarr:latest   # or the Lidarr image you use
+    depends_on:
+      - slskarr
+    volumes:
+      - lidarr-config:/config
+      - downloads:/downloads
+      - music:/music
+    ports:
+      - "8686:8686"
+
 volumes:
   downloads:
   slskd-config:
   slskarr-data:
   chaptarr-config:
   books:
+  lidarr-config:
+  music:
