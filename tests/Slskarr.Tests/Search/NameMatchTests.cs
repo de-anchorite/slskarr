@@ -12,6 +12,25 @@ public class NameMatchTests
         new(author, title, null, "EPUB", $"{author} - {title}");
 
     [Fact]
+    public void Music_artist_album_request_scores_on_parsed_artist_and_album()
+    {
+        var r = new SearchRequest(null, null, null, [], "Radiohead", "OK Computer (Deluxe Edition)");
+        NameMatch.Score(Name("Radiohead", "OK Computer"), r).ShouldBe(MatchBucket.Strong);
+        NameMatch.Score(Name("Someone Else", "OK Computer"), r).ShouldBe(MatchBucket.Partial);
+        NameMatch.Score(Name("Radiohead", "Kid A"), r).ShouldBe(MatchBucket.Weak);
+        NameMatch.Score(Name("Bjork", "Debut"), r).ShouldBe(MatchBucket.None);
+    }
+
+    [Fact]
+    public void Music_various_artists_request_matches_on_album_only()
+    {
+        var r = new SearchRequest(null, null, null, [], "VA", "Now 42");
+        NameMatch.Score(Name("Various Artists", "Now 42"), r).ShouldBe(MatchBucket.Strong);
+        NameMatch.Score(Name("Whoever", "Now 42"), r).ShouldBe(MatchBucket.Strong);
+        NameMatch.Score(Name("Various Artists", "Now 43"), r).ShouldBe(MatchBucket.Weak);
+    }
+
+    [Fact]
     public void NameMatch_buckets()
     {
         NameMatch.Score(Name("Frank Herbert", "Dune"), Dune).ShouldBe(MatchBucket.Strong);

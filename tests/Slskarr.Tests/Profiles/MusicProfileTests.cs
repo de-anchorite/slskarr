@@ -73,6 +73,27 @@ public class MusicProfileTests
         tier1.Value.ShouldBe(tier2.Value);
     }
 
+    [Theory]
+    [InlineData("VA", "Now 42", "VA Now 42")]
+    [InlineData("VA", "Now 42", "Various Artists Now 42")]
+    [InlineData("Beatles", "Abbey Road", "Beatles Abbey Road")]
+    public void Tier_keys_match_for_lidarr_text(string artist, string album, string q)
+    {
+        var music = Create();
+        SearchKey.For(music, new SearchRequest(null, null, null, NoCats, artist, album, "music")).Value
+            .ShouldBe(SearchKey.For(music, new SearchRequest(q, null, null, [3000], Function: "search")).Value);
+    }
+
+    [Fact]
+    public void Query_va_prefix_is_kept_when_nothing_else_remains() => Q(null, null, "VA").ShouldBe("VA");
+
+    [Fact]
+    public void Ebook_book_function_still_requires_book_categories()
+    {
+        Ebook().Handles(Req("book", null, 3030)).ShouldBeFalse();
+        Ebook().Handles(Req("book", null, 7020)).ShouldBeTrue();
+    }
+
     [Fact]
     public void Artist_and_album_request_is_not_rss() =>
         new SearchRequest(null, null, null, NoCats, "A", "B").IsRss.ShouldBeFalse();

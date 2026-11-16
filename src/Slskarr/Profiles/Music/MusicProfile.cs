@@ -87,19 +87,34 @@ public sealed partial class MusicProfile(IOptions<SlskarrOptions> options) : IMe
         }
         else
         {
-            raw = StripBrackets(r.Query ?? "");
+            raw = DropLeadingVariousArtists(StripBrackets(r.Query ?? ""));
         }
         return WhitespaceRegex().Replace(PunctuationRegex().Replace(raw, " "), " ").Trim();
     }
 
-    /// <summary>Removes bracketed segments; when that leaves nothing, keeps the text so "[Untitled]" still searches.</summary>
-    private static string StripBrackets(string text)
+    // Lidarr sends "Various Artists" as "VA" in both tiers (artist=VA&album=X, then q=VA X); the artist is
+    // dropped from the query, so tier 2 must drop it too for the two tiers to share one search key.
+    private static string DropLeadingVariousArtists(string q)
+    {
+        var rest = LeadingVariousArtistsRegex().Replace(q, "");
+        return rest.Length > 0 ? rest : q;
+    }
+
+    [GeneratedRegex(@"^\s*(?:various\s+artists|va)\b\s*", RegexOptions.CultureInvariant | RegexOptions.IgnoreCase)]
+    private static partial Regex LeadingVariousArtistsRegex();
+
+    /// <summary>
+    /// Removes bracketed segments; when that leaves nothing, keeps the text so "[Untitled]" still searches.
+    /// Known, accepted mismatch: artist=Prince&amp;album=[Untitled] keys as "prince untitled" while the tier-2
+    /// q=Prince [Untitled] keys without it. Brackets only reach us with Lidarr's "raw" text engine.
+    /// </summary>
+    internal static string StripBrackets(string text)
     {
         var stripped = WhitespaceRegex().Replace(BracketedRegex().Replace(text, " "), " ").Trim();
         return stripped.Length > 0 ? stripped : text.Trim();
     }
 
-    private static bool IsVariousArtists(string artist) =>
+    internal static bool IsVariousArtists(string artist) =>
         artist.Equals("various artists", StringComparison.OrdinalIgnoreCase)
         || artist.Equals("va", StringComparison.OrdinalIgnoreCase);
 

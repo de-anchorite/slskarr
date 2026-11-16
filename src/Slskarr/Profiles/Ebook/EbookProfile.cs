@@ -49,8 +49,7 @@ public sealed partial class EbookProfile(IOptions<SlskarrOptions> options, Ebook
 
     public bool Handles(SearchRequest r) => r.Function switch
     {
-        "book" => true,
-        null or "search" => r.Categories.Count == 0 || r.Categories.Any(c => c is >= 7000 and < 8000),
+        "book" or null or "search" => r.Categories.Count == 0 || r.Categories.Any(c => c is >= 7000 and < 8000),
         _ => false,
     };
 
