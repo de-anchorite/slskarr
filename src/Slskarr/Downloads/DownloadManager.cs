@@ -216,7 +216,12 @@ public sealed class DownloadManager(
                 return new AddResult(false, nzoId, "Download has no files");
             }
 
-            await RemoveTransfersAsync(job, job.Files, ct);
+            // Nothing is saved on this path, so a failed removal leaves the job and its retained ids as they were.
+            if (!await RemoveTransfersAsync(job, job.Files, ct))
+            {
+                return new AddResult(false, nzoId, "slskd unavailable: could not remove the old transfers; try again later");
+            }
+
             var batches = AssignBatches(job.Files.Select(f => f.Subdir), Guid.NewGuid());
             job.State = DownloadState.Queued;
             job.BytesDone = 0;
@@ -276,6 +281,11 @@ public sealed class DownloadManager(
             catch (Exception ex)
             {
                 if (await RemoveTransfersAsync(job, enqueued, CancellationToken.None))
+                {
+                    throw;
+                }
+
+                if (ex is OperationCanceledException)
                 {
                     throw;
                 }

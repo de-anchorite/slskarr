@@ -196,6 +196,29 @@ public sealed class DownloadManagerTests : IDisposable
     }
 
     [Fact]
+    public async Task Retry_fails_without_changes_when_old_transfers_cannot_be_removed()
+    {
+        AddAlbumHit("alb", (@"CD1\01.flac", "CD1"), (@"CD2\01.flac", "CD2"));
+        _h.Slskd.ThrowEnqueueNumber = 2;
+        _h.Slskd.CancelThrows = true;
+        var job = await AddAlbum("alb");
+        _h.Slskd.ThrowEnqueueNumber = null;
+        var enqueues = _h.Slskd.Enqueues.Count;
+
+        var result = await _h.Manager.RetryAsync(DownloadManager.NzoId(job.Id), CancellationToken.None);
+
+        result.Ok.ShouldBeFalse();
+        result.Error.ShouldNotBeNullOrEmpty();
+        _h.Slskd.Enqueues.Count.ShouldBe(enqueues);
+        var after = _h.Job(job.Id);
+        after.State.ShouldBe(DownloadState.Failed);
+        after.FailMessage.ShouldBe(job.FailMessage);
+        after.Files.Select(f => (f.BatchId, f.SlskdTransferId, f.State))
+            .ShouldBe(job.Files.Select(f => (f.BatchId, f.SlskdTransferId, f.State)));
+        after.Files.Count(f => f.SlskdTransferId != null).ShouldBe(1);
+    }
+
+    [Fact]
     public async Task Add_cleans_up_earlier_batches_when_a_later_batch_throws_unexpectedly()
     {
         AddAlbumHit("alb", (@"CD1\01.flac", "CD1"), (@"CD2\01.flac", "CD2"));
