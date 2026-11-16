@@ -101,7 +101,7 @@ public sealed class DownloadMonitor(
     private async Task PollJobAsync(Guid id, CancellationToken ct)
     {
         await using var db = await dbFactory.CreateDbContextAsync(ct);
-        var job = await db.DownloadJobs.FirstOrDefaultAsync(j => j.Id == id, ct);
+        var job = await db.DownloadJobs.Include(j => j.Files).FirstOrDefaultAsync(j => j.Id == id, ct);
         if (job is null || job.State is not (DownloadState.Queued or DownloadState.Downloading))
         {
             return;
@@ -116,7 +116,7 @@ public sealed class DownloadMonitor(
         SlskdBatch? batch;
         try
         {
-            batch = await slskd.GetBatchAsync(job.BatchId, ct);
+            batch = await slskd.GetBatchAsync(job.Files[0].BatchId, ct);
         }
         catch (SlskdUnavailableException)
         {
@@ -139,7 +139,7 @@ public sealed class DownloadMonitor(
         }
         else
         {
-            job.SlskdTransferId ??= transfer.Id;
+            job.Files[0].SlskdTransferId ??= transfer.Id;
             if (SlskdStates.IsSucceeded(transfer.State))
             {
                 Complete(job, now);
@@ -194,6 +194,10 @@ public sealed class DownloadMonitor(
         var current = await db.DownloadJobs.AsNoTracking().Where(j => j.Id == id).Select(j => j.State).FirstAsync(ct);
         if (current is DownloadState.Queued or DownloadState.Downloading)
         {
+            var file = job.Files[0];
+            file.State = job.State;
+            file.BytesDone = job.BytesDone;
+            file.PlaceInQueue = job.PlaceInQueue;
             await db.SaveChangesAsync(ct);
         }
 
@@ -206,7 +210,7 @@ public sealed class DownloadMonitor(
     /// moves it forward before the job has a transfer.
     /// </summary>
     private static bool InAddGrace(DownloadJobEntity job, DateTimeOffset now) =>
-        job.SlskdTransferId is null && now - job.LastProgressAt < AddGrace;
+        job.Files[0].SlskdTransferId is null && now - job.LastProgressAt < AddGrace;
 
     /// <summary>slskd no longer knows the transfer: it only counts as done if the full file is on disk.</summary>
     private async Task ResolveMissingAsync(DownloadJobEntity job, DateTimeOffset now, CancellationToken ct)

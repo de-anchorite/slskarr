@@ -75,6 +75,7 @@ public sealed class DownloadHarness : IDisposable
         Size = FileSize,
         ReleaseTitle = "Frank Herbert - Dune (1965)",
         Format = "EPUB",
+        Files = [new HitFileEntity { HitId = id, RemotePath = RemotePath, Size = FileSize }],
     };
 
     public async Task<DownloadJobEntity> AddJob()
@@ -86,14 +87,14 @@ public sealed class DownloadHarness : IDisposable
     public DownloadJobEntity Job(Guid id)
     {
         using var db = Db.CreateDbContext();
-        return db.DownloadJobs.AsNoTracking().Single(j => j.Id == id);
+        return db.DownloadJobs.AsNoTracking().Include(j => j.Files).Single(j => j.Id == id);
     }
 
     /// <summary>Changes a stored job directly, e.g. to set up a state the manager would only reach in a race.</summary>
     public void UpdateJob(Guid id, Action<DownloadJobEntity> change)
     {
         using var db = Db.CreateDbContext();
-        change(db.DownloadJobs.Single(j => j.Id == id));
+        change(db.DownloadJobs.Include(j => j.Files).Single(j => j.Id == id));
         db.SaveChanges();
     }
 

@@ -52,19 +52,19 @@ public sealed class DownloadMonitorTests : IDisposable
         var after = _h.Job(job.Id);
         after.State.ShouldBe(DownloadState.Failed);
         after.FailMessage.ShouldStartWith("Stalled");
-        _h.Slskd.Cancels.ShouldBe([(_h.Slskd.TransferIdFor(job.BatchId), true)]);
+        _h.Slskd.Cancels.ShouldBe([(_h.Slskd.TransferIdFor(job.Files[0].BatchId), true)]);
     }
 
     [Fact]
     public async Task Download_bytes_increase_is_progress_and_sets_downloading()
     {
         var job = await _h.AddJob();
-        _h.Slskd.SetTransfer(job.BatchId, "InProgress", 100);
+        _h.Slskd.SetTransfer(job.Files[0].BatchId, "InProgress", 100);
         await _h.Poll();
         _h.Job(job.Id).State.ShouldBe(DownloadState.Downloading);
 
         _h.Time.Advance(TimeSpan.FromMinutes(50));
-        _h.Slskd.SetTransfer(job.BatchId, "InProgress", 200);
+        _h.Slskd.SetTransfer(job.Files[0].BatchId, "InProgress", 200);
         await _h.Poll();
         _h.Time.Advance(TimeSpan.FromMinutes(50));
         await _h.Poll();
@@ -72,17 +72,17 @@ public sealed class DownloadMonitorTests : IDisposable
         var after = _h.Job(job.Id);
         after.State.ShouldBe(DownloadState.Downloading);
         after.BytesDone.ShouldBe(200);
-        after.SlskdTransferId.ShouldBe(_h.Slskd.TransferIdFor(job.BatchId));
+        after.Files[0].SlskdTransferId.ShouldBe(_h.Slskd.TransferIdFor(job.Files[0].BatchId));
     }
 
     [Fact]
     public async Task In_progress_back_to_queued_is_queued()
     {
         var job = await _h.AddJob();
-        _h.Slskd.SetTransfer(job.BatchId, "InProgress", 100);
+        _h.Slskd.SetTransfer(job.Files[0].BatchId, "InProgress", 100);
         await _h.Poll();
 
-        _h.Slskd.SetTransfer(job.BatchId, "Queued, Remotely");
+        _h.Slskd.SetTransfer(job.Files[0].BatchId, "Queued, Remotely");
         await _h.Poll();
 
         _h.Job(job.Id).State.ShouldBe(DownloadState.Queued);
@@ -92,7 +92,7 @@ public sealed class DownloadMonitorTests : IDisposable
     public async Task Rejected_maps_to_failed_with_reason()
     {
         var job = await _h.AddJob();
-        _h.Slskd.SetTransfer(job.BatchId, "Completed, Rejected");
+        _h.Slskd.SetTransfer(job.Files[0].BatchId, "Completed, Rejected");
 
         await _h.Poll();
 
@@ -111,7 +111,7 @@ public sealed class DownloadMonitorTests : IDisposable
             o.Paths.StorageRewriteTo = "/books";
         });
         var job = await _h.AddJob();
-        _h.Slskd.SetTransfer(job.BatchId, "Completed, Succeeded", DownloadHarness.FileSize);
+        _h.Slskd.SetTransfer(job.Files[0].BatchId, "Completed, Succeeded", DownloadHarness.FileSize);
 
         await _h.Poll();
 
@@ -156,7 +156,7 @@ public sealed class DownloadMonitorTests : IDisposable
         var after = _h.Job(job.Id);
         after.State.ShouldBe(DownloadState.Failed);
         after.FailMessage.ShouldStartWith("Stalled");
-        _h.Slskd.Cancels.ShouldBe([(_h.Slskd.TransferIdFor(job.BatchId), true)]);
+        _h.Slskd.Cancels.ShouldBe([(_h.Slskd.TransferIdFor(job.Files[0].BatchId), true)]);
     }
 
     [Fact]
@@ -222,7 +222,7 @@ public sealed class DownloadMonitorTests : IDisposable
         _h.Slskd.EnqueueError = null;
         await _h.Manager.RetryAsync(Slskarr.Downloads.DownloadManager.NzoId(job.Id), CancellationToken.None);
         var retried = _h.Job(job.Id);
-        _h.Slskd.SetTransfer(retried.BatchId, "Completed, Succeeded", DownloadHarness.FileSize);
+        _h.Slskd.SetTransfer(retried.Files[0].BatchId, "Completed, Succeeded", DownloadHarness.FileSize);
 
         await _h.Poll();
 
@@ -251,14 +251,14 @@ public sealed class DownloadMonitorTests : IDisposable
 
         var after = _h.Job(id);
         after.State.ShouldBe(DownloadState.Downloading);
-        after.SlskdTransferId.ShouldBe(_h.Slskd.TransferIdFor(id));
+        after.Files[0].SlskdTransferId.ShouldBe(_h.Slskd.TransferIdFor(id));
     }
 
     [Fact]
     public async Task Job_without_transfer_fails_only_after_add_grace()
     {
         var job = await _h.AddJob();
-        _h.UpdateJob(job.Id, j => j.SlskdTransferId = null);
+        _h.UpdateJob(job.Id, j => j.Files[0].SlskdTransferId = null);
         _h.Slskd.Batches.Clear();
 
         _h.Time.Advance(DownloadMonitor.AddGrace - TimeSpan.FromSeconds(1));
@@ -280,10 +280,10 @@ public sealed class DownloadMonitorTests : IDisposable
         var retriedAt = _h.Time.GetUtcNow();
         _h.UpdateJob(job.Id, j =>
         {
-            j.SlskdTransferId = null; // a retry whose enqueue left an empty batch
+            j.Files[0].SlskdTransferId = null; // a retry whose enqueue left an empty batch
             j.LastProgressAt = retriedAt;
         });
-        _h.Slskd.Batches[job.BatchId] = new SlskdBatch(job.BatchId, "peer", []);
+        _h.Slskd.Batches[job.Files[0].BatchId] = new SlskdBatch(job.Files[0].BatchId, "peer", []);
 
         _h.Time.Advance(TimeSpan.FromMinutes(1));
         await _h.Poll();

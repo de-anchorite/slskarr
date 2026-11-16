@@ -50,7 +50,7 @@ public sealed class DownloadManager(
                 return new AddResult(true, NzoId(existing.Id), null);
             }
 
-            var hit = await db.Hits.AsNoTracking().FirstOrDefaultAsync(h => h.Id == hitId, ct);
+            var hit = await db.Hits.AsNoTracking().Include(h => h.Files).FirstOrDefaultAsync(h => h.Id == hitId, ct);
             if (hit is null)
             {
                 return new AddResult(false, null, "Release expired or unknown");
@@ -61,13 +61,16 @@ public sealed class DownloadManager(
             var job = new DownloadJobEntity
             {
                 Id = id,
-                BatchId = id,
                 HitId = hit.Id,
                 Category = category,
                 Title = hit.ReleaseTitle,
                 Username = hit.Username,
                 RemotePath = hit.RemotePath,
                 Size = hit.Size,
+                Files = hit.Files.Select(f => new JobFileEntity
+                {
+                    RemotePath = f.RemotePath, Size = f.Size, Subdir = f.Subdir, BatchId = id, State = DownloadState.Queued,
+                }).ToList(),
                 State = DownloadState.Queued,
                 LastProgressAt = now,
                 CreatedAt = now,
@@ -111,7 +114,7 @@ public sealed class DownloadManager(
         }
 
         await using var db = await dbFactory.CreateDbContextAsync(ct);
-        var job = await db.DownloadJobs.FirstOrDefaultAsync(j => j.Id == id && j.State != DownloadState.Deleted, ct);
+        var job = await db.DownloadJobs.Include(j => j.Files).FirstOrDefaultAsync(j => j.Id == id && j.State != DownloadState.Deleted, ct);
         if (job is null)
         {
             return false;
@@ -177,7 +180,7 @@ public sealed class DownloadManager(
         try
         {
             await using var db = await dbFactory.CreateDbContextAsync(ct);
-            var job = await db.DownloadJobs.FirstOrDefaultAsync(j => j.Id == id && j.State != DownloadState.Deleted, ct);
+            var job = await db.DownloadJobs.Include(j => j.Files).FirstOrDefaultAsync(j => j.Id == id && j.State != DownloadState.Deleted, ct);
             if (job is null)
             {
                 return new AddResult(false, null, "Unknown download");
@@ -189,14 +192,17 @@ public sealed class DownloadManager(
             }
 
             await RemoveTransferAsync(job, ct);
-            job.BatchId = Guid.NewGuid();
+            job.Files[0].BatchId = Guid.NewGuid();
             job.State = DownloadState.Queued;
             job.BytesDone = 0;
             job.PlaceInQueue = null;
             job.LastProgressAt = time.GetUtcNow();
             job.CompletedAt = null;
             job.FailMessage = null;
-            job.SlskdTransferId = null;
+            job.Files[0].SlskdTransferId = null;
+            job.Files[0].State = DownloadState.Queued;
+            job.Files[0].BytesDone = 0;
+            job.Files[0].PlaceInQueue = null;
             job.StoragePath = null;
 
             // Throws, saving nothing (the job stays Failed), only when slskd has no batch for the retry.
@@ -225,7 +231,7 @@ public sealed class DownloadManager(
             try
             {
                 result = await slskd.EnqueueBatchAsync(
-                    job.BatchId, job.Username, [new SlskdEnqueueFile(job.RemotePath, job.Size)], StoragePaths.JobDir(job.Id), timeout.Token);
+                    job.Files[0].BatchId, job.Username, [new SlskdEnqueueFile(job.RemotePath, job.Size)], StoragePaths.JobDir(job.Id), timeout.Token);
             }
             catch (Exception ex) when (ex is SlskdUnavailableException
                 || (ex is OperationCanceledException && timeout.IsCancellationRequested))
@@ -248,7 +254,7 @@ public sealed class DownloadManager(
             return;
         }
 
-        job.SlskdTransferId = result.Batch?.Transfers.FirstOrDefault()?.Id;
+        job.Files[0].SlskdTransferId = result.Batch?.Transfers.FirstOrDefault()?.Id;
     }
 
     /// <summary>After a broken-off enqueue: true (transfer id recorded, if any) when slskd has the job's batch.</summary>
@@ -257,13 +263,13 @@ public sealed class DownloadManager(
         using var timeout = new CancellationTokenSource(ProbeTimeout, time);
         try
         {
-            var batch = await slskd.GetBatchAsync(job.BatchId, timeout.Token);
+            var batch = await slskd.GetBatchAsync(job.Files[0].BatchId, timeout.Token);
             if (batch is null)
             {
                 return false;
             }
 
-            job.SlskdTransferId = batch.Transfers.FirstOrDefault()?.Id;
+            job.Files[0].SlskdTransferId = batch.Transfers.FirstOrDefault()?.Id;
             logger.LogInformation("Enqueue for {Job} broke off but slskd has its batch ({Count} transfer(s)); keeping it",
                 job.Id, batch.Transfers.Count);
             return true;
@@ -281,10 +287,10 @@ public sealed class DownloadManager(
     {
         try
         {
-            var transferId = job.SlskdTransferId;
+            var transferId = job.Files[0].SlskdTransferId;
             if (transferId is null && job.State is DownloadState.Queued or DownloadState.Downloading)
             {
-                var batch = await slskd.GetBatchAsync(job.BatchId, ct);
+                var batch = await slskd.GetBatchAsync(job.Files[0].BatchId, ct);
                 transferId = batch?.Transfers.FirstOrDefault()?.Id;
             }
 
@@ -298,7 +304,7 @@ public sealed class DownloadManager(
             logger.LogWarning(ex, "slskd unreachable while removing transfer for {Job}", job.Id);
         }
 
-        job.SlskdTransferId = null;
+        job.Files[0].SlskdTransferId = null;
     }
 
     private async Task<IReadOnlyList<DownloadJobEntity>> ListAsync(string? category, DownloadState[] states, CancellationToken ct)

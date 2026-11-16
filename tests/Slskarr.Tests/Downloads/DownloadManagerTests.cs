@@ -22,7 +22,7 @@ public sealed class DownloadManagerTests : IDisposable
         var job = _h.Job(DownloadManager.ParseNzoId(result.NzoId!)!.Value);
         result.NzoId.ShouldBe("SLSKARR_" + job.Id.ToString("N"));
         job.State.ShouldBe(DownloadState.Queued);
-        job.BatchId.ShouldBe(job.Id);
+        job.Files[0].BatchId.ShouldBe(job.Id);
         job.LastProgressAt.ShouldBe(DownloadHarness.Start);
         job.Category.ShouldBe("ebooks");
         job.Title.ShouldBe("Frank Herbert - Dune (1965)");
@@ -91,7 +91,7 @@ public sealed class DownloadManagerTests : IDisposable
     public async Task Delete_with_files_calls_slskd_delete_dir()
     {
         var completed = await _h.AddJob();
-        _h.Slskd.SetTransfer(completed.BatchId, "Completed, Succeeded", DownloadHarness.FileSize);
+        _h.Slskd.SetTransfer(completed.Files[0].BatchId, "Completed, Succeeded", DownloadHarness.FileSize);
         await _h.Poll();
         _h.Job(completed.Id).State.ShouldBe(DownloadState.Completed);
 
@@ -99,7 +99,7 @@ public sealed class DownloadManagerTests : IDisposable
 
         _h.Slskd.DeletedDownloadDirs.ShouldBe(["slskarr/" + completed.Id.ToString("N")]);
         _h.Slskd.DeletedIncompleteFiles.ShouldBeEmpty();
-        _h.Slskd.Cancels.ShouldContain((_h.Slskd.TransferIdFor(completed.BatchId), true));
+        _h.Slskd.Cancels.ShouldContain((_h.Slskd.TransferIdFor(completed.Files[0].BatchId), true));
         _h.Job(completed.Id).State.ShouldBe(DownloadState.Deleted);
     }
 
@@ -119,7 +119,7 @@ public sealed class DownloadManagerTests : IDisposable
     public async Task Delete_downloading_with_files_cancels_then_deletes_the_partial_file()
     {
         var job = await _h.AddJob();
-        _h.Slskd.SetTransfer(job.BatchId, "InProgress", 100);
+        _h.Slskd.SetTransfer(job.Files[0].BatchId, "InProgress", 100);
         await _h.Poll();
 
         (await _h.Manager.DeleteAsync(DownloadManager.NzoId(job.Id), true, CancellationToken.None)).ShouldBeTrue();
@@ -159,7 +159,7 @@ public sealed class DownloadManagerTests : IDisposable
 
         _h.Slskd.DeletedDownloadDirs.ShouldBeEmpty();
         _h.Slskd.DeletedIncompleteFiles.ShouldBeEmpty();
-        _h.Slskd.Cancels.ShouldBe([(_h.Slskd.TransferIdFor(job.BatchId), true)]);
+        _h.Slskd.Cancels.ShouldBe([(_h.Slskd.TransferIdFor(job.Files[0].BatchId), true)]);
         (await _h.Manager.ActiveAsync(null, CancellationToken.None)).ShouldBeEmpty();
         (await _h.Manager.HistoryAsync(null, CancellationToken.None)).ShouldBeEmpty();
     }
@@ -210,13 +210,13 @@ public sealed class DownloadManagerTests : IDisposable
         result.NzoId.ShouldBe(DownloadManager.NzoId(job.Id));
         var after = _h.Job(job.Id);
         after.State.ShouldBe(DownloadState.Queued);
-        after.BatchId.ShouldNotBe(job.BatchId);
+        after.Files[0].BatchId.ShouldNotBe(job.Files[0].BatchId);
         after.FailMessage.ShouldBeNull();
         after.BytesDone.ShouldBe(0);
         after.PlaceInQueue.ShouldBeNull();
         after.LastProgressAt.ShouldBe(DownloadHarness.Start + TimeSpan.FromMinutes(10));
         _h.Slskd.Enqueues.Count.ShouldBe(2);
-        _h.Slskd.Enqueues[1].BatchId.ShouldBe(after.BatchId);
+        _h.Slskd.Enqueues[1].BatchId.ShouldBe(after.Files[0].BatchId);
         _h.Slskd.Enqueues[1].Destination.ShouldBe("slskarr/" + job.Id.ToString("N"));
     }
 
@@ -227,22 +227,22 @@ public sealed class DownloadManagerTests : IDisposable
         (await _h.Manager.RetryAsync(DownloadManager.NzoId(job.Id), CancellationToken.None)).Ok.ShouldBeFalse();
 
         await _h.Poll();
-        _h.Slskd.SetTransfer(job.BatchId, "Completed, Rejected");
+        _h.Slskd.SetTransfer(job.Files[0].BatchId, "Completed, Rejected");
         await _h.Poll();
         _h.Job(job.Id).State.ShouldBe(DownloadState.Failed);
 
         (await _h.Manager.RetryAsync(DownloadManager.NzoId(job.Id), CancellationToken.None)).Ok.ShouldBeTrue();
 
-        var oldTransfer = _h.Slskd.TransferIdFor(job.BatchId);
+        var oldTransfer = _h.Slskd.TransferIdFor(job.Files[0].BatchId);
         _h.Slskd.Cancels.ShouldContain((oldTransfer, true));
-        _h.Job(job.Id).SlskdTransferId.ShouldNotBe(oldTransfer);
+        _h.Job(job.Id).Files[0].SlskdTransferId.ShouldNotBe(oldTransfer);
         _h.Job(job.Id).State.ShouldBe(DownloadState.Queued);
     }
 
     private DownloadJobEntity OnlyJob()
     {
         using var db = _h.Db.CreateDbContext();
-        return db.DownloadJobs.AsNoTracking().Single();
+        return db.DownloadJobs.AsNoTracking().Include(j => j.Files).Single();
     }
 
     private int JobCount()
@@ -266,7 +266,7 @@ public sealed class DownloadManagerTests : IDisposable
         result.Ok.ShouldBeTrue();
         var job = OnlyJob();
         job.State.ShouldBe(DownloadState.Queued);
-        job.SlskdTransferId.ShouldBe(_h.Slskd.TransferIdFor(job.BatchId));
+        job.Files[0].SlskdTransferId.ShouldBe(_h.Slskd.TransferIdFor(job.Files[0].BatchId));
     }
 
     [Fact]
@@ -284,7 +284,7 @@ public sealed class DownloadManagerTests : IDisposable
         var job = OnlyJob();
         result.NzoId.ShouldBe(DownloadManager.NzoId(job.Id));
         job.State.ShouldBe(DownloadState.Queued);
-        job.SlskdTransferId.ShouldBe(_h.Slskd.TransferIdFor(job.BatchId));
+        job.Files[0].SlskdTransferId.ShouldBe(_h.Slskd.TransferIdFor(job.Files[0].BatchId));
     }
 
     [Fact]
@@ -298,7 +298,7 @@ public sealed class DownloadManagerTests : IDisposable
         result.Ok.ShouldBeTrue();
         var job = OnlyJob();
         job.State.ShouldBe(DownloadState.Queued);
-        job.SlskdTransferId.ShouldBe(_h.Slskd.TransferIdFor(job.BatchId));
+        job.Files[0].SlskdTransferId.ShouldBe(_h.Slskd.TransferIdFor(job.Files[0].BatchId));
         _h.Slskd.Enqueues.Count.ShouldBe(1);
     }
 
@@ -313,7 +313,7 @@ public sealed class DownloadManagerTests : IDisposable
         result.Ok.ShouldBeTrue();
         var job = OnlyJob();
         job.State.ShouldBe(DownloadState.Queued);
-        job.SlskdTransferId.ShouldBeNull();
+        job.Files[0].SlskdTransferId.ShouldBeNull();
 
         await _h.Poll();
         _h.Job(job.Id).State.ShouldBe(DownloadState.Queued);
@@ -380,8 +380,8 @@ public sealed class DownloadManagerTests : IDisposable
         result.Ok.ShouldBeTrue();
         var after = _h.Job(job.Id);
         after.State.ShouldBe(DownloadState.Queued);
-        after.BatchId.ShouldNotBe(job.BatchId);
-        after.SlskdTransferId.ShouldBe(_h.Slskd.TransferIdFor(after.BatchId));
+        after.Files[0].BatchId.ShouldNotBe(job.Files[0].BatchId);
+        after.Files[0].SlskdTransferId.ShouldBe(_h.Slskd.TransferIdFor(after.Files[0].BatchId));
     }
 
     [Fact]
@@ -395,7 +395,7 @@ public sealed class DownloadManagerTests : IDisposable
 
         var after = _h.Job(job.Id);
         after.State.ShouldBe(DownloadState.Queued);
-        after.SlskdTransferId.ShouldBeNull();
+        after.Files[0].SlskdTransferId.ShouldBeNull();
     }
 
     [Fact]
@@ -409,7 +409,7 @@ public sealed class DownloadManagerTests : IDisposable
 
         var after = _h.Job(job.Id);
         after.State.ShouldBe(DownloadState.Failed);
-        after.BatchId.ShouldBe(job.BatchId);
+        after.Files[0].BatchId.ShouldBe(job.Files[0].BatchId);
     }
 
     [Fact]
@@ -427,6 +427,6 @@ public sealed class DownloadManagerTests : IDisposable
         (await retry.Within()).Ok.ShouldBeTrue();
         var after = _h.Job(job.Id);
         after.State.ShouldBe(DownloadState.Queued);
-        after.SlskdTransferId.ShouldBe(_h.Slskd.TransferIdFor(after.BatchId));
+        after.Files[0].SlskdTransferId.ShouldBe(_h.Slskd.TransferIdFor(after.Files[0].BatchId));
     }
 }

@@ -11,6 +11,10 @@ public sealed class SlskarrDb(DbContextOptions<SlskarrDb> options) : DbContext(o
 
     public DbSet<DownloadJobEntity> DownloadJobs => Set<DownloadJobEntity>();
 
+    public DbSet<HitFileEntity> HitFiles => Set<HitFileEntity>();
+
+    public DbSet<JobFileEntity> JobFiles => Set<JobFileEntity>();
+
     protected override void ConfigureConventions(ModelConfigurationBuilder configurationBuilder)
     {
         // Ticks keep SQLite ordering and comparison correct (its text form is not offset-aware).
@@ -27,6 +31,12 @@ public sealed class SlskarrDb(DbContextOptions<SlskarrDb> options) : DbContext(o
             e.HasKey(h => h.Id);
             e.HasIndex(h => new { h.SearchKey, h.Username, h.RemotePath }).IsUnique();
             e.HasIndex(h => h.SeenAt);
+            e.HasMany(h => h.Files).WithOne().HasForeignKey(f => f.HitId).OnDelete(DeleteBehavior.Cascade);
+        });
+        modelBuilder.Entity<HitFileEntity>(e =>
+        {
+            e.HasKey(f => f.Id);
+            e.HasIndex(f => new { f.HitId, f.RemotePath }).IsUnique();
         });
         modelBuilder.Entity<SearchJobEntity>(e =>
         {
@@ -38,6 +48,12 @@ public sealed class SlskarrDb(DbContextOptions<SlskarrDb> options) : DbContext(o
             e.HasKey(d => d.Id);
             e.HasIndex(d => d.HitId);
             e.HasIndex(d => d.State);
+            e.HasMany(d => d.Files).WithOne().HasForeignKey(f => f.JobId).OnDelete(DeleteBehavior.Cascade);
+        });
+        modelBuilder.Entity<JobFileEntity>(e =>
+        {
+            e.HasKey(f => f.Id);
+            e.HasIndex(f => new { f.JobId, f.RemotePath }).IsUnique();
         });
     }
 

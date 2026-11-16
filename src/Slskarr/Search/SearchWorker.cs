@@ -357,7 +357,7 @@ public sealed class SearchWorker(
         await using (var db = await dbFactory.CreateDbContextAsync(ct))
         {
             var now = time.GetUtcNow();
-            var existing = (await db.Hits.Where(h => h.SearchKey == key).ToListAsync(ct))
+            var existing = (await db.Hits.Include(h => h.Files).Where(h => h.SearchKey == key).ToListAsync(ct))
                 .ToDictionary(h => (h.Username, h.RemotePath));
             for (var i = 0; i < ranked.Count; i++)
             {
@@ -374,6 +374,15 @@ public sealed class SearchWorker(
                         ReleaseTitle = c.ReleaseTitle,
                         Format = c.Name.Format,
                     }).Entity;
+                }
+
+                if (hit.Files.Count == 0)
+                {
+                    hit.Files.Add(new HitFileEntity { HitId = hit.Id, RemotePath = c.RemotePath, Size = c.Size });
+                }
+                else
+                {
+                    hit.Files[0].Size = c.Size;
                 }
 
                 hit.Size = c.Size;
