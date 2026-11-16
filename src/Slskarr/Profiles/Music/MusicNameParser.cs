@@ -33,6 +33,13 @@ public static partial class MusicNameParser
     [GeneratedRegex(@"\s+", RegexOptions.CultureInvariant)]
     private static partial Regex WhitespaceRegex();
 
+    // Unbracketed quality words would override the tag Slskarr appends, so they are dropped from names.
+    [GeneratedRegex(@"\b(?:flac|mp3|aac|alac|ogg|opus|wav|ape|wv|m4a|web|v[02]|(?:16|24)[-._ ]?bit|24-(?:44|48|96|192)|\d{2,3}[ ]?kbps)\b", RegexOptions.CultureInvariant | RegexOptions.IgnoreCase)]
+    private static partial Regex QualityNoiseRegex();
+
+    [GeneratedRegex(@"(?:\s+-){2,}", RegexOptions.CultureInvariant)]
+    private static partial Regex RepeatedDashRegex();
+
     [GeneratedRegex(@"^@@\w+$|^[A-Za-z]:$", RegexOptions.CultureInvariant)]
     private static partial Regex RootRegex();
 
@@ -48,7 +55,8 @@ public static partial class MusicNameParser
         // Year-only parts ("Artist - 1997 - Album", "1997 - Album") carry the year, not the name.
         for (var i = parts.Count - 1; i >= 0; i--)
         {
-            if (parts.Count > 1 && YearRegex().IsMatch(parts[i]))
+            // A year that is the last part after the artist ("Van Halen - 1984") is the album, not a year.
+            if (parts.Count > 1 && YearRegex().IsMatch(parts[i]) && (i < parts.Count - 1 || i >= 2))
             {
                 year ??= int.Parse(parts[i], System.Globalization.CultureInfo.InvariantCulture);
                 parts.RemoveAt(i);
@@ -112,7 +120,10 @@ public static partial class MusicNameParser
             }
         } while (changed);
 
-        return (text.Trim().TrimEnd('-').TrimEnd(), year);
+        text = QualityNoiseRegex().Replace(text, " ");
+        text = WhitespaceRegex().Replace(text, " ");
+        text = RepeatedDashRegex().Replace(text, " -").Trim().Trim('-').Trim();
+        return (text, year);
     }
 
     private static bool IsNoiseGroup(string content)

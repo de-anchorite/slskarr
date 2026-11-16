@@ -25,6 +25,22 @@ public class MusicNameParserTests
         parsed.Format.ShouldBe("");
     }
 
+    [Theory]
+    [InlineData(@"Van Halen - 1984", "Van Halen", "1984", null)]
+    [InlineData(@"Prince - 1999", "Prince", "1999", null)]
+    [InlineData(@"Prince - 1999 (1999)", "Prince", "1999", 1999)]
+    [InlineData(@"Radiohead - OK Computer FLAC (1997)", "Radiohead", "OK Computer", 1997)]
+    [InlineData(@"Artist - Album 320kbps", "Artist", "Album", null)]
+    [InlineData(@"Artist - Album V0 WEB", "Artist", "Album", null)]
+    [InlineData(@"Artist - FLAC - Album", "Artist", "Album", null)]
+    public void Parse_year_albums_and_quality_noise(string path, string artist, string album, int? year)
+    {
+        var parsed = MusicNameParser.Parse(path);
+        parsed.Author.ShouldBe(artist);
+        parsed.Title.ShouldBe(album);
+        parsed.Year.ShouldBe(year);
+    }
+
     [Fact]
     public void Parse_unknown_layout_keeps_only_stem()
     {

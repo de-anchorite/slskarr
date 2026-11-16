@@ -26,7 +26,14 @@ public class MusicQualityTests
         { "FLAC", Files("flac", 3), "OK Computer", "FLAC", "FLAC" },
         { "M4A", Files("m4a", 3, 256, null, 44100, false), "OK Computer", "AAC 256", "AAC-256" },
         { "APE", Files("ape", 3, 900), "OK Computer", "APE", "APE" },
-        { "OPUS", Files("opus", 3, 128), "OK Computer", "Opus", "Unknown" },
+        { "OPUS", Files("opus", 3), "OK Computer", "Opus", "Unknown" },
+        { "OPUS", Files("opus", 3, 192), "OK Computer", "Opus 192", "Vorbis-Q6" },
+        { "OGG", Files("ogg", 3, 320), "OK Computer", "OGG 320", "Vorbis-Q9" },
+        { "OGG", Files("ogg", 3, 128), "OK Computer", "OGG 160", "Vorbis-Q5" },
+        { "MP3", Files("mp3", 3, 224, null, 44100, false), "OK Computer", "MP3 192", "MP3-192" },
+        { "MP3", Files("mp3", 3, 240, null, 44100, false), "OK Computer", "MP3 256", "MP3-256" },
+        { "M4A", Files("m4a", 3, 128, null, 44100, false), "OK Computer", "AAC 192", "AAC-192" },
+        { "AIFF", Files("aiff", 3), "OK Computer", "AIFF", "Unknown" },
         { "ALAC", Files("m4a", 3, 900, 24, 96000), "OK Computer", "ALAC 24bit", "ALAC 24bit" },
         { "WAV", Files("wav", 3), "OK Computer", "WAV", "WAV" },
         { "WV", Files("wv", 3), "OK Computer", "WV", "WavPack" },
@@ -37,7 +44,22 @@ public class MusicQualityTests
     public void Tag_matches_intended_lidarr_quality(string format, List<CandidateFile> files, string folder, string tag, string lidarr)
     {
         MusicQuality.Tag(format, files, folder).ShouldBe(tag);
-        LidarrQualityParser.Parse($"Radiohead - OK Computer (1997) [{tag}]").ShouldBe(lidarr);
+        var title = MusicTitle.Build(MusicNameParser.Parse(@"Radiohead\OK Computer (1997)"), tag);
+        title.ShouldBe($"Radiohead - OK Computer (1997) [{tag}]");
+        LidarrQualityParser.Parse(title).ShouldBe(lidarr);
+    }
+
+    [Theory]
+    [InlineData(@"Radiohead - OK Computer FLAC (1997)", "FLAC", "FLAC")]
+    [InlineData(@"Artist - Album 320kbps", "MP3 VBR V0", "MP3-VBR-V0")]
+    [InlineData(@"Artist - Album V0 WEB", "MP3 320", "MP3-320")]
+    [InlineData(@"Artist - Album MP3 V2", "MP3 256", "MP3-256")]
+    [InlineData(@"Artist - Album [24bit] 24-96 (2001)", "FLAC", "FLAC")]
+    [InlineData(@"Artist\Album FLAC 24bit 2001", "FLAC 24bit", "FLAC 24bit")]
+    public void Contaminated_names_do_not_override_tag(string folder, string tag, string lidarr)
+    {
+        var title = MusicTitle.Build(MusicNameParser.Parse(folder), tag);
+        LidarrQualityParser.Parse(title).ShouldBe(lidarr);
     }
 
     [Fact]

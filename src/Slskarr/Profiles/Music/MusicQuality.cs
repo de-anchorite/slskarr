@@ -9,7 +9,11 @@ namespace Slskarr.Profiles.Music;
 /// </summary>
 public static partial class MusicQuality
 {
-    private static readonly int[] Bitrates = [96, 128, 160, 192, 224, 256, 320];
+    // Buckets Lidarr's title parser maps per codec (QualityParser.cs): MP3 CBR has no 224; AAC only 192/256/320
+    // (anything else reads as AAC-VBR, so the closest mapped bucket is used); Vorbis/Opus map Q5-Q10 = 160..500.
+    private static readonly int[] Mp3Bitrates = [96, 128, 160, 192, 256, 320];
+    private static readonly int[] AacBitrates = [192, 256, 320];
+    private static readonly int[] VorbisBitrates = [160, 192, 224, 256, 320, 500];
 
     [GeneratedRegex(@"24[-._ ]?bit", RegexOptions.CultureInvariant | RegexOptions.IgnoreCase)]
     private static partial Regex Marker24Regex();
@@ -37,13 +41,13 @@ public static partial class MusicQuality
             case "m4a" or "aac":
                 return Aac(set, folderName);
             case "ogg":
-                return "OGG";
+                return Vorbis("OGG", set);
             case "opus":
-                return "Opus";
+                return Vorbis("Opus", set);
             case "wav":
                 return "WAV";
             case "aiff" or "aif":
-                return "AIFF";
+                return "AIFF"; // Lidarr's title parser has no AIFF codec: reads as Unknown (documented in tests)
             case "ape":
                 return "APE";
             case "wv":
@@ -69,7 +73,7 @@ public static partial class MusicQuality
         {
             if (files.All(f => f.IsVbr == true))
                 return rated.Average(f => f.BitRate!.Value) >= 220 ? "MP3 VBR V0" : "MP3 VBR V2";
-            return "MP3 " + Nearest(Modal(rated));
+            return "MP3 " + Nearest(Mp3Bitrates, Modal(rated));
         }
 
         var vbr = MarkerVbrRegex().Match(folder);
@@ -83,16 +87,22 @@ public static partial class MusicQuality
     {
         var rated = files.Where(f => f.BitRate is > 0).ToList();
         if (rated.Count > 0)
-            return "AAC " + Nearest(Modal(rated));
+            return "AAC " + Nearest(AacBitrates, Modal(rated));
         var rate = MarkerBitrateRegex().Match(folder);
         return rate.Success ? "AAC " + rate.Groups[1].Value : "AAC";
+    }
+
+    private static string Vorbis(string codec, List<CandidateFile> files)
+    {
+        var rated = files.Where(f => f.BitRate is > 0).ToList();
+        return rated.Count > 0 ? $"{codec} {Nearest(VorbisBitrates, Modal(rated))}" : codec;
     }
 
     private static int Modal(List<CandidateFile> rated) =>
         rated.GroupBy(f => f.BitRate!.Value).OrderByDescending(g => g.Count()).ThenByDescending(g => g.Key).First().Key;
 
-    private static int Nearest(int bitrate) =>
-        Bitrates.MinBy(b => Math.Abs(b - bitrate));
+    private static int Nearest(int[] buckets, int bitrate) =>
+        buckets.MinBy(b => Math.Abs(b - bitrate));
 }
 
 /// <summary>Builds the Lidarr-facing release title: <c>Artist - Album (Year) [TAG]</c>.</summary>
