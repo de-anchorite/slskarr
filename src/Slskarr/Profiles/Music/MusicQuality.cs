@@ -73,7 +73,7 @@ public static partial class MusicQuality
         {
             if (files.All(f => f.IsVbr == true))
                 return rated.Average(f => f.BitRate!.Value) >= 220 ? "MP3 VBR V0" : "MP3 VBR V2";
-            return "MP3 " + Nearest(Mp3Bitrates, Modal(rated));
+            return Coded("MP3", Mp3Bitrates, Modal(rated));
         }
 
         var vbr = MarkerVbrRegex().Match(folder);
@@ -87,7 +87,7 @@ public static partial class MusicQuality
     {
         var rated = files.Where(f => f.BitRate is > 0).ToList();
         if (rated.Count > 0)
-            return "AAC " + Nearest(AacBitrates, Modal(rated));
+            return Coded("AAC", AacBitrates, Modal(rated));
         var rate = MarkerBitrateRegex().Match(folder);
         return rate.Success ? "AAC " + rate.Groups[1].Value : "AAC";
     }
@@ -95,14 +95,21 @@ public static partial class MusicQuality
     private static string Vorbis(string codec, List<CandidateFile> files)
     {
         var rated = files.Where(f => f.BitRate is > 0).ToList();
-        return rated.Count > 0 ? $"{codec} {Nearest(VorbisBitrates, Modal(rated))}" : codec;
+        return rated.Count > 0 ? Coded(codec, VorbisBitrates, Modal(rated)) : codec;
     }
 
     private static int Modal(List<CandidateFile> rated) =>
         rated.GroupBy(f => f.BitRate!.Value).OrderByDescending(g => g.Count()).ThenByDescending(g => g.Key).First().Key;
 
-    private static int Nearest(int[] buckets, int bitrate) =>
-        buckets.MinBy(b => Math.Abs(b - bitrate));
+    /// <summary>
+    /// Never rounds up into a higher bucket (that would overstate quality): picks the highest mapped bucket
+    /// at most 5% above the actual bitrate. Below the lowest bucket the codec is emitted without a bitrate.
+    /// </summary>
+    private static string Coded(string codec, int[] buckets, int bitrate)
+    {
+        var fit = buckets.Where(b => b <= bitrate * 1.05).DefaultIfEmpty(0).Max();
+        return fit == 0 ? codec : $"{codec} {fit}";
+    }
 }
 
 /// <summary>Builds the Lidarr-facing release title: <c>Artist - Album (Year) [TAG]</c>.</summary>
