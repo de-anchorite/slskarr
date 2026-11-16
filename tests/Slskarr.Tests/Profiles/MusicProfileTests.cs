@@ -84,6 +84,33 @@ public class MusicProfileTests
             .ShouldBe(SearchKey.For(music, new SearchRequest(q, null, null, [3000], Function: "search")).Value);
     }
 
+    // Lidarr self-titled: tier 1 artist=W&album=W&year=Y, tier 2 q="W W Y". One search key, one Soulseek query "W".
+    [Theory]
+    [InlineData("Weezer", "Weezer Weezer 1994", "Weezer")]
+    [InlineData("Led Zeppelin", "Led Zeppelin Led Zeppelin 1969", "Led Zeppelin")]
+    [InlineData("Weezer", "weezer WEEZER", "weezer")]
+    public void Self_titled_tiers_share_key_and_query(string artist, string q, string expected)
+    {
+        var music = Create();
+        var tier1 = new SearchRequest(null, null, null, NoCats, artist, artist, "music");
+        var tier2 = new SearchRequest(q, null, null, [3000], Function: "search");
+
+        SearchKey.For(music, tier1).Value.ShouldBe(SearchKey.For(music, tier2).Value);
+        music.BuildQuery(tier2).ShouldBe(expected);
+        music.BuildQuery(tier1).ShouldBe(artist);
+    }
+
+    [Fact]
+    public void Self_titled_key_is_the_artist_alone() =>
+        SearchKey.For(Create(), new SearchRequest("Weezer Weezer 1994", null, null, [3000], Function: "search")).Value.ShouldBe("music:weezer");
+
+    [Theory]
+    [InlineData("Radiohead OK Computer 1997")]
+    [InlineData("Weezer Pinkerton")]
+    [InlineData("Weezer Weezer Weezer")]
+    [InlineData("Weezer 1994")]
+    public void Non_self_titled_q_is_unchanged(string q) => Q(null, null, q).ShouldBe(q);
+
     [Fact]
     public void Query_va_prefix_is_kept_when_nothing_else_remains() => Q(null, null, "VA").ShouldBe("VA");
 

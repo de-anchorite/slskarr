@@ -79,17 +79,46 @@ public sealed partial class MusicProfile(IOptions<SlskarrOptions> options) : IMe
         {
             var artist = r.Artist?.Trim() ?? "";
             var album = StripBrackets(r.Album ?? "");
-            if (IsVariousArtists(artist))
+            if (IsVariousArtists(artist) || artist.Equals(album, StringComparison.OrdinalIgnoreCase))
             {
+                // Self-titled albums search the name once (tier 2 collapses "W W yyyy" to match).
                 artist = "";
             }
             raw = string.Join(' ', new[] { artist, album }.Where(s => s.Length > 0));
+            return Clean(raw);
         }
-        else
+
+        raw = DropLeadingVariousArtists(StripBrackets(r.Query ?? ""));
+        return CollapseSelfTitled(Clean(raw));
+    }
+
+    private static string Clean(string raw) => WhitespaceRegex().Replace(PunctuationRegex().Replace(raw, " "), " ").Trim();
+
+    /// <summary>
+    /// Lidarr's tier 2 for a self-titled album is <c>q=W W yyyy</c> (artist, album, year) while tier 1 sends
+    /// <c>artist=W&amp;album=W</c> and the year separately (ignored). Collapsing to <c>W</c> keeps one search key.
+    /// </summary>
+    private static string CollapseSelfTitled(string q)
+    {
+        var words = q.Split(' ', StringSplitOptions.RemoveEmptyEntries);
+        var n = words.Length;
+        if (n >= 3 && words[^1].Length == 4 && words[^1].All(char.IsAsciiDigit))
         {
-            raw = DropLeadingVariousArtists(StripBrackets(r.Query ?? ""));
+            n--;
         }
-        return WhitespaceRegex().Replace(PunctuationRegex().Replace(raw, " "), " ").Trim();
+        if (n < 2 || n % 2 != 0)
+        {
+            return q;
+        }
+        var half = n / 2;
+        for (var i = 0; i < half; i++)
+        {
+            if (!words[i].Equals(words[half + i], StringComparison.OrdinalIgnoreCase))
+            {
+                return q;
+            }
+        }
+        return string.Join(' ', words[..half]);
     }
 
     // Lidarr sends "Various Artists" as "VA" in both tiers (artist=VA&album=X, then q=VA X); the artist is

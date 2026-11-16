@@ -182,6 +182,44 @@ public sealed class NewznabContractTests : IDisposable
         check.SearchJobs.Count().ShouldBe(1);
     }
 
+    // Lidarr's self-titled shape: tier 1 sends year separately, tier 2 appends it to "artist album".
+    [Fact]
+    public async Task Lidarr_self_titled_tiers_are_one_search()
+    {
+        var slskd = new Slskarr.Tests.Search.FakeSearchSlskd(TimeProvider.System);
+        using var factory = new SlskarrFactory().WithServices(s => s.AddSingleton<Slskarr.Soulseek.ISlskdClient>(slskd));
+        var dbf = factory.Services.GetRequiredService<IDbContextFactory<SlskarrDb>>();
+        var profile = factory.Services.GetRequiredService<ProfileRegistry>().ByName("music")!;
+        var weezer = new SearchRequest(null, null, null, [3000, 3010, 3040], "Weezer", "Weezer", "music");
+        SearchKey.For(profile, weezer).Value.ShouldBe("music:weezer");
+        await using (var db = await dbf.CreateDbContextAsync())
+        {
+            var now = factory.Time.GetUtcNow();
+            db.SearchJobs.Add(new SearchJobEntity
+            {
+                Key = SearchKey.For(profile, weezer).Value, Profile = "music", QueryText = profile.BuildQuery(weezer),
+                RequestJson = SearchCoordinator.WriteRequest(weezer), State = SearchJobState.Done,
+                CreatedAt = now, LastRequestedAt = now, CompletedAt = now,
+            });
+            await db.SaveChangesAsync();
+        }
+
+        using var client = factory.CreateClient();
+        foreach (var url in new[]
+                 {
+                     "/newznab/api?t=music&cat=3000,3010,3040&extended=1&offset=0&limit=100&q=&artist=Weezer&album=Weezer&year=1994",
+                     "/newznab/api?t=search&cat=3000,3010,3040&extended=1&offset=0&limit=100&q=Weezer%20Weezer%201994",
+                 })
+        {
+            (await Xml(await client.GetAsync(url))).Descendants("item").ShouldBeEmpty(url);
+        }
+
+        slskd.StartedTexts.ShouldBeEmpty();
+        await using var check = await dbf.CreateDbContextAsync();
+        check.SearchJobs.Select(j => j.Key).ShouldBe(["music:weezer"]);
+        check.SearchJobs.Single().QueryText.ShouldBe("Weezer");
+    }
+
     [Fact]
     public async Task Music_rss_never_searches()
     {
