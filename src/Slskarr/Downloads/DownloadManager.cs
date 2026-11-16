@@ -79,6 +79,7 @@ public sealed class DownloadManager(
                 }).ToList(),
                 State = DownloadState.Queued,
                 LastProgressAt = now,
+                EnqueuedAt = now,
                 CreatedAt = now,
             };
             db.DownloadJobs.Add(job);
@@ -227,6 +228,7 @@ public sealed class DownloadManager(
             job.BytesDone = 0;
             job.PlaceInQueue = null;
             job.LastProgressAt = time.GetUtcNow();
+            job.EnqueuedAt = job.LastProgressAt;
             job.CompletedAt = null;
             job.FailMessage = null;
             job.StoragePath = null;

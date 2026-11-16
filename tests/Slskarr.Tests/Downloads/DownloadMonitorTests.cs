@@ -282,6 +282,7 @@ public sealed class DownloadMonitorTests : IDisposable
         {
             j.Files[0].SlskdTransferId = null; // a retry whose enqueue left an empty batch
             j.LastProgressAt = retriedAt;
+            j.EnqueuedAt = retriedAt;
         });
         _h.Slskd.Batches[job.Files[0].BatchId] = new SlskdBatch(job.Files[0].BatchId, "peer", []);
 
@@ -465,5 +466,166 @@ public sealed class DownloadMonitorTests : IDisposable
         var after = _h.Job(job.Id);
         after.State.ShouldBe(DownloadState.Completed);
         after.StoragePath.ShouldBe($"/downloads/slskarr/{job.Id:N}/Frank Herbert - Dune (1965).epub");
+    }
+
+    [Fact]
+    public async Task Stall_with_cancel_failing_keeps_job_active_until_removal_works()
+    {
+        var id = _h.AddAlbum("01.flac", "02.flac");
+        _h.Slskd.Place = 5;
+        await _h.Poll();
+
+        _h.Time.Advance(TimeSpan.FromMinutes(61));
+        _h.Slskd.CancelThrows = true;
+        await _h.Poll();
+        _h.Job(id).State.ShouldBe(DownloadState.Queued);
+        _h.Slskd.Cancels.ShouldBeEmpty();
+
+        _h.Slskd.CancelThrows = false;
+        await _h.Poll();
+        var after = _h.Job(id);
+        after.State.ShouldBe(DownloadState.Failed);
+        after.FailMessage.ShouldStartWith("Stalled");
+        _h.Slskd.Cancels.Count.ShouldBe(2);
+    }
+
+    [Fact]
+    public async Task Failed_track_with_cancel_failing_keeps_job_active_until_removal_works()
+    {
+        var id = _h.AddAlbum("01.flac", "02.flac");
+        _h.SetAlbumFile("01.flac", "InProgress", 100);
+        _h.SetAlbumFile("02.flac", "Completed, Rejected");
+        _h.Slskd.CancelThrows = true;
+        await _h.Poll();
+        _h.Job(id).State.ShouldBe(DownloadState.Queued); // nothing was saved
+
+        _h.Slskd.CancelThrows = false;
+        await _h.Poll();
+        var after = _h.Job(id);
+        after.State.ShouldBe(DownloadState.Failed);
+        after.FailMessage.ShouldBe("Soulseek: Rejected (02.flac)");
+        _h.Slskd.Cancels.Count.ShouldBe(1);
+    }
+
+    [Fact]
+    public async Task Batch_that_never_appears_fails_after_grace_despite_progress_elsewhere()
+    {
+        var id = _h.AddAlbum("01.flac", "d2/01.flac");
+        var disc2 = _h.Job(id).Files.Single(f => f.Subdir == "d2").BatchId;
+        _h.UpdateJob(id, j => j.Files.Single(f => f.Subdir == "d2").SlskdTransferId = null);
+        _h.Slskd.Batches[disc2] = new SlskdBatch(disc2, "peer", []);
+
+        for (var minute = 1; minute <= 2; minute++)
+        {
+            _h.Time.Advance(TimeSpan.FromMinutes(1));
+            _h.SetAlbumFile("01.flac", "InProgress", minute * 100);
+            await _h.Poll();
+            _h.Job(id).State.ShouldBe(DownloadState.Downloading);
+        }
+
+        _h.Time.Advance(TimeSpan.FromMinutes(1.5));
+        _h.SetAlbumFile("01.flac", "InProgress", 300);
+        await _h.Poll();
+
+        var after = _h.Job(id);
+        after.State.ShouldBe(DownloadState.Failed);
+        after.FailMessage.ShouldBe("Transfer disappeared from slskd");
+    }
+
+    [Fact]
+    public async Task Missing_batch_beside_a_progressing_one_is_resolved_from_its_own_folder()
+    {
+        var id = _h.AddAlbum("01.flac", "d2/01.flac");
+        _h.Time.Advance(TimeSpan.FromMinutes(10));
+        _h.Slskd.Batches.Remove(_h.Job(id).Files.Single(f => f.Subdir == "d2").BatchId);
+        _h.SetAlbumFile("01.flac", "InProgress", 100);
+        _h.Slskd.Dirs[$"slskarr/{id:N}/d2"] = [new SlskdLocalFile("01.flac", DownloadHarness.FileSize)];
+
+        await _h.Poll();
+
+        var after = _h.Job(id);
+        after.State.ShouldBe(DownloadState.Downloading);
+        after.Files.Single(f => f.Subdir == "d2").State.ShouldBe(DownloadState.Completed);
+        after.Files.Single(f => f.Subdir == "").State.ShouldBe(DownloadState.Downloading);
+    }
+
+    [Fact]
+    public async Task Missing_file_with_wrong_size_on_disk_fails()
+    {
+        var id = _h.AddAlbum("01.flac", "02.flac");
+        _h.Time.Advance(TimeSpan.FromMinutes(10));
+        _h.Slskd.Batches.Clear();
+        _h.Slskd.Dirs[$"slskarr/{id:N}"] = [new SlskdLocalFile("01.flac", DownloadHarness.FileSize), new SlskdLocalFile("02.flac", 10)];
+
+        await _h.Poll();
+
+        var after = _h.Job(id);
+        after.State.ShouldBe(DownloadState.Failed);
+        after.FailMessage.ShouldBe("Transfer disappeared from slskd");
+    }
+
+    [Fact]
+    public async Task Slskd_outage_is_not_counted_toward_stall_for_multi_batch_jobs()
+    {
+        var id = _h.AddAlbum("01.flac", "d2/01.flac");
+        _h.Slskd.Place = 5;
+        await _h.Poll();
+
+        _h.Slskd.Unavailable = true;
+        _h.Time.Advance(TimeSpan.FromMinutes(50));
+        await _h.Poll();
+        _h.Time.Advance(TimeSpan.FromMinutes(50));
+        await _h.Poll();
+        _h.Slskd.Unavailable = false;
+        await _h.Poll();
+
+        _h.Job(id).State.ShouldBe(DownloadState.Queued);
+        _h.Slskd.Cancels.ShouldBeEmpty();
+    }
+
+    [Fact]
+    public async Task Each_batch_is_asked_for_once_per_poll()
+    {
+        var id = _h.AddAlbum("01.flac", "02.flac", "d2/01.flac");
+        var batches = _h.Job(id).Files.Select(f => f.BatchId).Distinct().ToList();
+        batches.Count.ShouldBe(2);
+
+        await _h.Poll();
+
+        _h.Slskd.BatchCalls.ShouldBe(batches, ignoreOrder: true);
+    }
+
+    [Fact]
+    public async Task Progress_on_a_different_track_than_before_resets_stall_clock()
+    {
+        var id = _h.AddAlbum("01.flac", "02.flac");
+        _h.SetAlbumFile("01.flac", "InProgress", 100);
+        _h.SetAlbumFile("02.flac", "InProgress", 50);
+        await _h.Poll();
+
+        _h.Time.Advance(TimeSpan.FromMinutes(50));
+        _h.SetAlbumFile("02.flac", "InProgress", 100);
+        await _h.Poll();
+
+        _h.Time.Advance(TimeSpan.FromMinutes(50));
+        await _h.Poll();
+        _h.Job(id).State.ShouldBe(DownloadState.Downloading);
+
+        _h.Time.Advance(TimeSpan.FromMinutes(11));
+        await _h.Poll();
+        _h.Job(id).State.ShouldBe(DownloadState.Failed);
+    }
+
+    [Fact]
+    public async Task Single_file_job_uses_the_only_transfer_of_its_batch_under_another_name()
+    {
+        var job = await _h.AddJob();
+        var batch = job.Files[0].BatchId;
+        _h.Slskd.Batches[batch] = new SlskdBatch(batch, "peer",
+            [new SlskdTransfer(Guid.NewGuid(), batch, "peer", @"@@abcde\Other\name.epub", DownloadHarness.FileSize, "Completed, Succeeded", DownloadHarness.FileSize, 0, null, null)]);
+
+        await _h.Poll();
+
+        _h.Job(job.Id).State.ShouldBe(DownloadState.Completed);
     }
 }

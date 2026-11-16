@@ -133,7 +133,9 @@ public sealed class DownloadMonitor(
 
             foreach (var file in group)
             {
-                transfers[file] = batch?.Transfers.FirstOrDefault(t => t.Filename == file.RemotePath);
+                // A single-file job also accepts its batch's only transfer under another name (ebooks, as before).
+                transfers[file] = batch?.Transfers.FirstOrDefault(t => t.Filename == file.RemotePath)
+                    ?? (job.Files.Count == 1 ? batch?.Transfers.FirstOrDefault() : null);
             }
         }
 
@@ -197,7 +199,10 @@ public sealed class DownloadMonitor(
 
         if (failure is not null)
         {
-            await FailAsync(job, failure, finished, ct);
+            if (!await FailAsync(job, failure, finished, ct))
+            {
+                return; // removal not confirmed: the job stays active, nothing is saved, the next poll retries
+            }
         }
         else if (job.Files.All(f => f.State == DownloadState.Completed))
         {
@@ -208,9 +213,10 @@ public sealed class DownloadMonitor(
         else
         {
             job.State = job.Files.Any(f => f.State == DownloadState.Downloading) ? DownloadState.Downloading : DownloadState.Queued;
-            if (now - job.LastProgressAt > _options.Downloads.StallTimeout)
+            if (now - job.LastProgressAt > _options.Downloads.StallTimeout
+                && !await FailAsync(job, $"Stalled: no progress for {_options.Downloads.StallTimeout}", [], ct))
             {
-                await FailAsync(job, $"Stalled: no progress for {_options.Downloads.StallTimeout}", [], ct);
+                return;
             }
         }
 
@@ -246,26 +252,32 @@ public sealed class DownloadMonitor(
         job.Files.Count > 1 ? $"Soulseek: {reason} ({SoulseekPath.FileName(file.RemotePath)})" : "Soulseek: " + reason;
 
     /// <summary>Cancels and removes every transfer of the job (but <paramref name="except"/>), then marks the job and all its files failed.</summary>
-    private async Task FailAsync(DownloadJobEntity job, string message, List<JobFileEntity> except, CancellationToken ct)
+    private async Task<bool> FailAsync(DownloadJobEntity job, string message, List<JobFileEntity> except, CancellationToken ct)
     {
-        await TransferCleanup.RemoveAsync(slskd, logger, job, [.. job.Files.Except(except)], ct);
+        if (!await TransferCleanup.RemoveAsync(slskd, logger, job, [.. job.Files.Except(except)], ct))
+        {
+            return false;
+        }
+
         job.State = DownloadState.Failed;
         job.FailMessage = message;
         foreach (var file in job.Files)
         {
             file.State = DownloadState.Failed;
         }
+
+        return true;
     }
 
     private bool StorageIsFolder(DownloadJobEntity job) => profiles.ForSabCategory(job.Category)?.StorageIsFolder ?? false;
 
     /// <summary>
-    /// A file with no recorded transfer may still be enqueueing: it has no transfer id and the latest (re)enqueue
-    /// is recent. <see cref="DownloadJobEntity.LastProgressAt"/> is that time, as both add and retry set it and
-    /// nothing else moves it forward before the job has a transfer.
+    /// A file with no recorded transfer may still be enqueueing: it has no transfer id and the job's latest
+    /// (re)enqueue, <see cref="DownloadJobEntity.EnqueuedAt"/> (set by add and retry), is recent. Progress on
+    /// other files does not move it, so a batch that never appears is detected AddGrace after the enqueue.
     /// </summary>
     private static bool InAddGrace(JobFileEntity file, DownloadJobEntity job, DateTimeOffset now) =>
-        file.SlskdTransferId is null && now - job.LastProgressAt < AddGrace;
+        file.SlskdTransferId is null && now - job.EnqueuedAt < AddGrace;
 
     /// <summary>
     /// slskd no longer knows these files' transfers: each only counts as done if its full file is on disk

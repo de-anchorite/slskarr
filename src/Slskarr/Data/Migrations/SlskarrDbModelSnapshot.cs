@@ -36,6 +36,9 @@ namespace Slskarr.Data.Migrations
                     b.Property<long>("CreatedAt")
                         .HasColumnType("INTEGER");
 
+                    b.Property<long>("EnqueuedAt")
+                        .HasColumnType("INTEGER");
+
                     b.Property<string>("FailMessage")
                         .HasColumnType("TEXT");
 

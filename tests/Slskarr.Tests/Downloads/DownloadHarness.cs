@@ -143,6 +143,7 @@ public sealed class DownloadHarness : IDisposable
                 Size = FileSize * names.Length,
                 State = DownloadState.Queued,
                 LastProgressAt = Time.GetUtcNow(),
+                EnqueuedAt = Time.GetUtcNow(),
                 CreatedAt = Time.GetUtcNow(),
                 Files = files,
             });
@@ -208,6 +209,9 @@ public sealed class FakeDownloadSlskd : ISlskdClient
     public List<EnqueueCall> Enqueues { get; } = [];
 
     public Dictionary<Guid, SlskdBatch> Batches { get; } = [];
+
+    /// <summary>Batch ids asked for through <see cref="GetBatchAsync"/>, in call order.</summary>
+    public List<Guid> BatchCalls { get; } = [];
 
     public List<(Guid TransferId, bool Remove)> Cancels { get; } = [];
 
@@ -325,6 +329,7 @@ public sealed class FakeDownloadSlskd : ISlskdClient
             throw new SlskdUnavailableException("down");
         }
 
+        BatchCalls.Add(batchId);
         return Task.FromResult(Batches.GetValueOrDefault(batchId));
     }
 

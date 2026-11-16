@@ -117,6 +117,9 @@ public sealed class DownloadJobEntity
 
     public DateTimeOffset LastProgressAt { get; set; }
 
+    /// <summary>When the job's transfers were last (re)enqueued (add or retry); the monitor's add grace counts from here.</summary>
+    public DateTimeOffset EnqueuedAt { get; set; }
+
     public DateTimeOffset CreatedAt { get; set; }
 
     public DateTimeOffset? CompletedAt { get; set; }
