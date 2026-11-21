@@ -57,7 +57,10 @@ public static class NewznabEndpoints
                     ? RssAllProfiles(search) ? registry.All.FirstOrDefault() : registry.ForRequest(search)
                     : null;
                 var placeholder = placeholderProfile is null ? (DateTimeOffset?)null : time.GetUtcNow();
-                return Results.Bytes(NewznabXml.Feed(hits, registry, placeholderProfile, BaseUrl(req), apiKey, offset, placeholder), Rss);
+                var baseUrl = BaseUrl(req);
+                var browserBaseUrl = options.Value.ExternalUrl?.AbsoluteUri.TrimEnd('/') ?? baseUrl;
+                return Results.Bytes(
+                    NewznabXml.Feed(hits, registry, placeholderProfile, baseUrl, browserBaseUrl, apiKey, offset, placeholder), Rss);
 
             case "get":
                 var id = q["id"].ToString();

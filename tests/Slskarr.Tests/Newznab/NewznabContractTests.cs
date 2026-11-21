@@ -501,6 +501,47 @@ public sealed class NewznabContractTests : IDisposable
         item.Element("comments")!.Value.ShouldBe("https://indexer.example.org/release/AAAAAAAAAAAAAAAAAAAAAA");
     }
 
+    [Theory]
+    [InlineData("http://nas.example.org:8080")]
+    [InlineData("http://nas.example.org:8080/")]
+    public async Task External_url_is_used_for_browser_links_only(string externalUrl)
+    {
+        using var factory = new SlskarrFactory().WithConfig(c => c["Slskarr:ExternalUrl"] = externalUrl);
+        var dbf = factory.Services.GetRequiredService<IDbContextFactory<SlskarrDb>>();
+        await using (var db = await dbf.CreateDbContextAsync())
+        {
+            db.Hits.Add(Hit("AAAAAAAAAAAAAAAAAAAAAA", "Newest"));
+            await db.SaveChangesAsync();
+        }
+
+        using var client = factory.CreateClient();
+        var doc = await Xml(await client.GetAsync("/newznab/api?t=book"));
+        var item = doc.Descendants("item").Single();
+
+        item.Element("comments")!.Value.ShouldBe("http://nas.example.org:8080/release/AAAAAAAAAAAAAAAAAAAAAA");
+        doc.Descendants("channel").Single().Element("link")!.Value.ShouldBe("http://nas.example.org:8080");
+        // The *arr fetches the NZB server-side, from wherever it reached Slskarr.
+        item.Element("enclosure")!.Attribute("url")!.Value.ShouldBe("http://localhost/newznab/api?t=get&id=AAAAAAAAAAAAAAAAAAAAAA");
+        item.Element("link")!.Value.ShouldBe("http://localhost/newznab/api?t=get&id=AAAAAAAAAAAAAAAAAAAAAA");
+    }
+
+    [Fact]
+    public async Task External_url_keeps_a_path_prefix()
+    {
+        using var factory = new SlskarrFactory().WithConfig(c => c["Slskarr:ExternalUrl"] = "https://example.org/slskarr/");
+        var dbf = factory.Services.GetRequiredService<IDbContextFactory<SlskarrDb>>();
+        await using (var db = await dbf.CreateDbContextAsync())
+        {
+            db.Hits.Add(Hit("AAAAAAAAAAAAAAAAAAAAAA", "Newest"));
+            await db.SaveChangesAsync();
+        }
+
+        using var client = factory.CreateClient();
+        var item = (await Xml(await client.GetAsync("/newznab/api?t=book"))).Descendants("item").Single();
+
+        item.Element("comments")!.Value.ShouldBe("https://example.org/slskarr/release/AAAAAAAAAAAAAAAAAAAAAA");
+    }
+
     [Fact]
     public async Task Poisoned_names_do_not_break_feed_or_get()
     {

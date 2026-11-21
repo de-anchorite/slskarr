@@ -36,18 +36,21 @@ internal static class NewznabXml
         new XDeclaration("1.0", "utf-8", null),
         new XElement("error", new XAttribute("code", code), new XAttribute("description", description))));
 
+    /// <param name="baseUrl">Where the *arr reached Slskarr: NZB download links, fetched server-side.</param>
+    /// <param name="browserBaseUrl">Where a browser reaches Slskarr: links the *arr UIs show.</param>
     /// <param name="placeholderAt">When set, the feed holds only <see cref="NewznabPlaceholder"/>, dated this time.</param>
     public static byte[] Feed(
-        IEnumerable<HitEntity> hits, ProfileRegistry registry, IMediaProfile? placeholderProfile, string baseUrl, string? apiKey, int offset, DateTimeOffset? placeholderAt = null)
+        IEnumerable<HitEntity> hits, ProfileRegistry registry, IMediaProfile? placeholderProfile, string baseUrl, string browserBaseUrl, string? apiKey, int offset,
+        DateTimeOffset? placeholderAt = null)
     {
         var channel = new XElement("channel",
             new XElement("title", "Slskarr"),
             new XElement("description", "Slskarr Soulseek indexer"),
-            new XElement("link", baseUrl),
+            new XElement("link", browserBaseUrl),
             new XElement(Attr + "response", new XAttribute("offset", offset)));
         foreach (var hit in hits)
         {
-            channel.Add(Item(hit, registry.ByName(hit.Profile) ?? registry.All[0], baseUrl, apiKey));
+            channel.Add(Item(hit, registry.ByName(hit.Profile) ?? registry.All[0], baseUrl, browserBaseUrl, apiKey));
         }
 
         if (placeholderAt is { } at)
@@ -56,14 +59,14 @@ internal static class NewznabXml
             {
                 Id = NewznabPlaceholder.Id, SearchKey = "", Profile = placeholderProfile?.Name ?? "", Username = "", RemotePath = "",
                 ReleaseTitle = NewznabPlaceholder.Title, Size = NewznabPlaceholder.Size, Format = "", SeenAt = at,
-            }, placeholderProfile ?? registry.All[0], baseUrl, apiKey));
+            }, placeholderProfile ?? registry.All[0], baseUrl, browserBaseUrl, apiKey));
         }
 
         return StubNzb.Serialize(new XDocument(new XDeclaration("1.0", "utf-8", null),
             new XElement("rss", new XAttribute("version", "2.0"), new XAttribute(XNamespace.Xmlns + "newznab", Attr.NamespaceName), channel)));
     }
 
-    private static XElement Item(HitEntity hit, IMediaProfile profile, string baseUrl, string? apiKey)
+    private static XElement Item(HitEntity hit, IMediaProfile profile, string baseUrl, string browserBaseUrl, string? apiKey)
     {
         var url = $"{baseUrl}/newznab/api?t=get&id={Uri.EscapeDataString(hit.Id)}"
             + (string.IsNullOrWhiteSpace(apiKey) ? "" : $"&apikey={Uri.EscapeDataString(apiKey)}");
@@ -72,7 +75,7 @@ internal static class NewznabXml
             new XElement("title", XmlText.Clean(hit.ReleaseTitle)),
             new XElement("guid", new XAttribute("isPermaLink", "false"), XmlText.Clean(hit.Id)),
             new XElement("link", url),
-            new XElement("comments", $"{baseUrl}/release/{Uri.EscapeDataString(hit.Id)}"),
+            new XElement("comments", $"{browserBaseUrl}/release/{Uri.EscapeDataString(hit.Id)}"),
             new XElement("pubDate", hit.SeenAt.UtcDateTime.ToString("R", CultureInfo.InvariantCulture)),
             new XElement("size", size),
             new XElement("enclosure", new XAttribute("url", url), new XAttribute("length", size), new XAttribute("type", "application/x-nzb")),

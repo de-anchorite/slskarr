@@ -141,6 +141,7 @@ Required: `Slskarr__Slskd__Url` and `Slskarr__Slskd__ApiKey`. Slskarr refuses to
 | Variable | Default | Description |
 | --- | --- | --- |
 | `Slskarr__ApiKey` | (unset) | Key the *arrs must send as `apikey`. If unset, endpoints are unauthenticated (a warning is logged). |
+| `Slskarr__ExternalUrl` | (unset) | URL your browser uses to reach Slskarr, e.g. `http://nas.local:8080`. Used for the release info links the *arrs show; unset uses the URL the *arr called (`X-Forwarded-*` honoured). NZB download links always use the latter. |
 | `Slskarr__DataPath` | `/data` | Directory for the SQLite database. |
 | `Slskarr__Slskd__Url` | (required) | slskd base URL, e.g. `http://slskd:5030`. |
 | `Slskarr__Slskd__ApiKey` | (required) | slskd API key. |
