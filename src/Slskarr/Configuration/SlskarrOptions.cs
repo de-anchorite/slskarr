@@ -12,6 +12,12 @@ public sealed class SlskarrOptions
 
     public string? ApiKey { get; set; }
 
+    /// <summary>
+    /// Base URL a browser uses to reach Slskarr, for links the *arr UIs display (release info pages). Unset uses
+    /// the URL the request came in on (honouring <c>X-Forwarded-*</c>). NZB download links always use the latter.
+    /// </summary>
+    public Uri? ExternalUrl { get; set; }
+
     public string DataPath { get; set; } = "/data";
 
     public SlskdOptions Slskd { get; set; } = new();

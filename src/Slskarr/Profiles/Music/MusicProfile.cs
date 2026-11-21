@@ -34,8 +34,13 @@ public sealed partial class MusicProfile(IOptions<SlskarrOptions> options) : IMe
 
     public IReadOnlyList<string> Ranking => _options.Ranking;
 
-    [GeneratedRegex(@"[:;,!?""'()\[\]]", RegexOptions.CultureInvariant)]
+    // Apostrophes stay: Soulseek peers match "Haven't" as typed, and "Haven t" misses.
+    [GeneratedRegex(@"[:;,!?""()\[\]]", RegexOptions.CultureInvariant)]
     private static partial Regex PunctuationRegex();
+
+    // MusicBrainz and Goodreads titles often use typographic apostrophes; most Soulseek file names use '.
+    [GeneratedRegex(@"[\u2018\u2019\u02BC]", RegexOptions.CultureInvariant)]
+    private static partial Regex TypographicApostropheRegex();
 
     [GeneratedRegex(@"\s+", RegexOptions.CultureInvariant)]
     private static partial Regex WhitespaceRegex();
@@ -90,7 +95,8 @@ public sealed partial class MusicProfile(IOptions<SlskarrOptions> options) : IMe
         return CollapseSelfTitled(Clean(raw));
     }
 
-    private static string Clean(string raw) => WhitespaceRegex().Replace(PunctuationRegex().Replace(raw, " "), " ").Trim();
+    private static string Clean(string raw) =>
+        WhitespaceRegex().Replace(PunctuationRegex().Replace(TypographicApostropheRegex().Replace(raw, "'"), " "), " ").Trim();
 
     /// <summary>
     /// Lidarr's tier 2 for a self-titled album is <c>q=W W yyyy</c> (artist, album, year; <c>0</c> when the year

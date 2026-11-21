@@ -75,6 +75,12 @@ public sealed class SlskarrOptionsValidator : IValidateOptions<SlskarrOptions>
             failures.Add("Slskarr:Slskd:Url is required and must be an absolute http(s) URL.");
         }
 
+        if (options.ExternalUrl is { } external
+            && (!external.IsAbsoluteUri || (external.Scheme != Uri.UriSchemeHttp && external.Scheme != Uri.UriSchemeHttps)))
+        {
+            failures.Add("Slskarr:ExternalUrl must be an absolute http(s) URL, e.g. http://nas.local:8080.");
+        }
+
         if (string.IsNullOrWhiteSpace(options.Slskd.ApiKey))
         {
             failures.Add("Slskarr:Slskd:ApiKey is required.");

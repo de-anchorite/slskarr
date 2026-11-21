@@ -138,6 +138,19 @@ public class OptionsTests
         ex.Message.ShouldContain("Slskd:ApiKey");
     }
 
+    [Theory]
+    [InlineData("nas.local:8080")]
+    [InlineData("/slskarr")]
+    [InlineData("ftp://nas.local")]
+    public void Options_reject_non_http_external_url(string url) =>
+        Should.Throw<OptionsValidationException>(() => Resolve(Valid(("Slskarr:ExternalUrl", url))))
+            .Message.ShouldContain("ExternalUrl");
+
+    [Fact]
+    public void Options_accept_http_external_url() =>
+        Resolve(Valid(("Slskarr:ExternalUrl", "https://nas.example.org/slskarr"))).ExternalUrl
+            .ShouldBe(new Uri("https://nas.example.org/slskarr"));
+
     [Fact]
     public void Options_reject_unknown_ranking_criterion()
     {

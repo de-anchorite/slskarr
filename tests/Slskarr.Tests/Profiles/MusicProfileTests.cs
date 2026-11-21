@@ -65,6 +65,18 @@ public class MusicProfileTests
     public void Query_q_only_strips_brackets() => Q(null, null, "Radiohead OK Computer [Remastered]").ShouldBe("Radiohead OK Computer");
 
     [Fact]
+    public void Query_keeps_apostrophes() =>
+        Q("Sin\u00e9ad O'Connor", "I Do Not Want What I Haven't Got").ShouldBe("Sin\u00e9ad O'Connor I Do Not Want What I Haven't Got");
+
+    [Fact]
+    public void Query_normalises_typographic_apostrophes() =>
+        Q("Guns N\u2019 Roses", "Appetite for Destruction").ShouldBe("Guns N' Roses Appetite for Destruction");
+
+    [Fact]
+    public void Query_q_keeps_apostrophes() => Q(null, null, "Guns N\u2019 Roses Appetite for Destruction")
+        .ShouldBe("Guns N' Roses Appetite for Destruction");
+
+    [Fact]
     public void Tier_keys_match()
     {
         var music = Create();
