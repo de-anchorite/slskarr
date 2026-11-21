@@ -45,7 +45,12 @@ public class EbookProfileTests
     [Fact]
     public void BuildQuery_strips_punctuation_and_collapses_whitespace() =>
         Create().BuildQuery(new SearchRequest("Dune:  \"Messiah\"; (Part 1)! [a], what's?", null, null, []))
-            .ShouldBe("Dune Messiah Part 1 a what s");
+            .ShouldBe("Dune Messiah Part 1 a what's");
+
+    [Fact]
+    public void BuildQuery_keeps_apostrophes_and_normalises_typographic_ones() =>
+        Create().BuildQuery(new SearchRequest(null, "Flann O\u2019Brien", "At Swim-Two-Birds 'Annotated'", []))
+            .ShouldBe("Flann O'Brien At Swim-Two-Birds 'Annotated'");
 
     [Fact]
     public void ToCandidates_drops_non_ebook_types()
