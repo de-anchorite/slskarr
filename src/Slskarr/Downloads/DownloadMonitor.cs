@@ -109,6 +109,7 @@ public sealed class DownloadMonitor(
         }
 
         var now = time.GetUtcNow();
+        var before = (job.State, job.PlaceInQueue);
         if (!_resumed.Contains(id))
         {
             if (job.LastProgressAt < _startedAt)
@@ -251,9 +252,38 @@ public sealed class DownloadMonitor(
         if (current is DownloadState.Queued or DownloadState.Downloading)
         {
             await db.SaveChangesAsync(ct);
+            LogChange(job, before.State, before.PlaceInQueue);
         }
 
         _resumed.Add(id);
+    }
+
+    private void LogChange(DownloadJobEntity job, DownloadState was, int? wasPlace)
+    {
+        if (job.State != was)
+        {
+            switch (job.State)
+            {
+                case DownloadState.Downloading:
+                    logger.LogInformation("Downloading {Title} ({Job}) from {User}", job.Title, job.Id, job.Username);
+                    break;
+                case DownloadState.Queued:
+                    logger.LogInformation("{Title} ({Job}) is back in {User}'s upload queue", job.Title, job.Id, job.Username);
+                    break;
+                case DownloadState.Completed:
+                    logger.LogInformation("Completed {Title} ({Job}); the *arr imports it from {StoragePath}", job.Title, job.Id, job.StoragePath);
+                    break;
+                case DownloadState.Failed:
+                    logger.LogWarning("Download {Title} ({Job}) from {User} failed: {Error}", job.Title, job.Id, job.Username, job.FailMessage);
+                    break;
+            }
+        }
+        else if (job.State == DownloadState.Queued && job.PlaceInQueue != wasPlace)
+        {
+            // The first known position is worth a line; every later move only at Debug.
+            logger.Log(wasPlace is null ? LogLevel.Information : LogLevel.Debug,
+                "{Title} ({Job}) is waiting in {User}'s upload queue at position {Place}", job.Title, job.Id, job.Username, job.PlaceInQueue);
+        }
     }
 
     /// <summary>Records a file's state; more bytes or a moved queue position count as progress.</summary>

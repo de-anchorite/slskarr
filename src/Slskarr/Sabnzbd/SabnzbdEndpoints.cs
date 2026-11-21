@@ -14,6 +14,8 @@ namespace Slskarr.Sabnzbd;
 /// <summary>The SABnzbd download-client face: <c>/sabnzbd/api?mode=…</c>, JSON only.</summary>
 public static class SabnzbdEndpoints
 {
+    private const string LogCategory = "Slskarr.Sabnzbd";
+
     public static IEndpointRouteBuilder MapSabnzbd(this IEndpointRouteBuilder app)
     {
         app.MapMethods("/sabnzbd/api", ["GET", "POST"], HandleAsync);
@@ -26,9 +28,11 @@ public static class SabnzbdEndpoints
         ProfileRegistry registry,
         DownloadManager manager,
         IDbContextFactory<SlskarrDb> dbFactory,
+        ILoggerFactory loggers,
         CancellationToken ct)
     {
         var opts = options.Value;
+        var logger = loggers.CreateLogger(LogCategory);
         if (AuthError(req, opts.ApiKey) is { } authError)
         {
             return Results.Json(SabnzbdJson.Error(authError));
@@ -36,17 +40,18 @@ public static class SabnzbdEndpoints
 
         try
         {
-            return Results.Json(await DispatchAsync(req, opts, registry, manager, dbFactory, ct));
+            return Results.Json(await DispatchAsync(req, opts, registry, manager, dbFactory, logger, ct));
         }
-        catch (SlskdUnavailableException)
+        catch (SlskdUnavailableException ex)
         {
+            logger.LogWarning("SABnzbd mode={Mode} failed: slskd unavailable: {Error}", Param(req, "mode"), ex.Message);
             return Results.Json(SabnzbdJson.Error("slskd unavailable"));
         }
     }
 
     private static async Task<object> DispatchAsync(
         HttpRequest req, SlskarrOptions opts, ProfileRegistry registry, DownloadManager manager,
-        IDbContextFactory<SlskarrDb> dbFactory, CancellationToken ct)
+        IDbContextFactory<SlskarrDb> dbFactory, ILogger logger, CancellationToken ct)
     {
         switch (Param(req, "mode").ToLowerInvariant())
         {
@@ -60,7 +65,7 @@ public static class SabnzbdEndpoints
                 return SabnzbdJson.FullStatus(CompleteDir(opts));
 
             case "addfile":
-                return await AddFileAsync(req, registry, manager, ct);
+                return await AddFileAsync(req, registry, manager, logger, ct);
 
             case "queue":
                 if (IsDelete(req))
@@ -83,6 +88,11 @@ public static class SabnzbdEndpoints
 
             case "retry":
                 var retry = await manager.RetryAsync(Param(req, "value"), ct);
+                if (!retry.Ok)
+                {
+                    logger.LogWarning("Retry of {NzoId} refused: {Error}", Param(req, "value"), retry.Error);
+                }
+
                 return retry.Ok ? SabnzbdJson.Retried(retry.NzoId!) : SabnzbdJson.Error(retry.Error ?? "Retry failed");
 
             case "browse":
@@ -93,12 +103,15 @@ public static class SabnzbdEndpoints
         }
     }
 
-    private static async Task<object> AddFileAsync(HttpRequest req, ProfileRegistry registry, DownloadManager manager, CancellationToken ct)
+    private static async Task<object> AddFileAsync(
+        HttpRequest req, ProfileRegistry registry, DownloadManager manager, ILogger logger, CancellationToken ct)
     {
         var cat = Param(req, "cat");
         var profile = string.IsNullOrWhiteSpace(cat) ? registry.All.FirstOrDefault() : registry.ForSabCategory(cat);
         if (profile is null)
         {
+            logger.LogWarning("Add refused: unknown category \"{Category}\" (expected one of {Known})",
+                cat, string.Join(", ", registry.All.Select(p => p.SabCategory)));
             return SabnzbdJson.Error("Unknown category");
         }
 
@@ -112,6 +125,7 @@ public static class SabnzbdEndpoints
 
         if (string.IsNullOrEmpty(hitId))
         {
+            logger.LogWarning("Add refused: Not a Slskarr NZB ({File})", file?.FileName ?? "no file uploaded");
             return SabnzbdJson.Error("Not a Slskarr NZB");
         }
 

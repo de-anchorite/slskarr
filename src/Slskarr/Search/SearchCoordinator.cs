@@ -6,6 +6,7 @@ using Microsoft.Extensions.Options;
 using Slskarr.Configuration;
 using Slskarr.Data;
 using Slskarr.Profiles;
+using static System.FormattableString;
 
 namespace Slskarr.Search;
 
@@ -20,7 +21,8 @@ public sealed class SearchCoordinator(
     IDbContextFactory<SlskarrDb> dbFactory,
     IOptions<SlskarrOptions> options,
     SearchThrottle throttle,
-    TimeProvider time)
+    TimeProvider time,
+    ILogger<SearchCoordinator> logger)
 {
     /// <summary>A failed job is not re-queued by requests within this long of its failure.</summary>
     internal static readonly TimeSpan FailedRetryAfter = TimeSpan.FromMinutes(5);
@@ -52,6 +54,7 @@ public sealed class SearchCoordinator(
         if (key.Tokens.Count == 0)
         {
             // Nothing searchable (only stop words or punctuation); never send that to Soulseek.
+            logger.LogInformation("Nothing searchable in the {Profile} request; no Soulseek search", p.Name);
             return [];
         }
 
@@ -68,6 +71,8 @@ public sealed class SearchCoordinator(
         catch (TimeoutException)
         {
             // Late results are picked up later through RSS.
+            logger.LogInformation("Search {Key} still running after {SyncWait}; answering with what is stored, later results come through RSS",
+                decision.JobKey, _options.SyncWait);
         }
 
         await using var db = await dbFactory.CreateDbContextAsync(ct);
@@ -137,12 +142,15 @@ public sealed class SearchCoordinator(
             // 3. Fresh cache hit.
             if (exact is { State: SearchJobState.Done, CompletedAt: { } done } && done > fresh)
             {
-                return (await HitsForAsync(db, exact, ct), null, null);
+                var cached = await HitsForAsync(db, exact, ct);
+                logger.LogInformation("Search {Key}: {Count} release(s) cached from {Age} ago", exact.Key, cached.Count, Age(now - done));
+                return (cached, null, null);
             }
 
             // A recent failure is not retried yet.
             if (exact is { State: SearchJobState.Failed, CompletedAt: { } failed } && failed > now - FailedRetryAfter)
             {
+                logger.LogInformation("Search {Key} failed {Age} ago ({Error}); not retrying yet", exact.Key, Age(now - failed), exact.Error);
                 return (await HitsForAsync(db, exact, ct), null, null);
             }
 
@@ -160,10 +168,16 @@ public sealed class SearchCoordinator(
 
             if (target is { State: SearchJobState.Done })
             {
-                return (await HitsForAsync(db, target, ct), null, null);
+                var covered = await HitsForAsync(db, target, ct);
+                logger.LogInformation("Search {Key}: {Count} release(s) cached from the broader search {Target}", key.Value, covered.Count, target.Key);
+                return (covered, null, null);
             }
 
-            if (target is null)
+            if (target is not null)
+            {
+                logger.LogInformation("Search {Key}: waiting for the {State} search {Target}", key.Value, target.State, target.Key);
+            }
+            else
             {
                 // 5. Upsert our own job.
                 target = exact ?? db.SearchJobs.Add(new SearchJobEntity
@@ -180,6 +194,8 @@ public sealed class SearchCoordinator(
                 {
                     Requeue(target, p, r, now);
                 }
+
+                logger.LogInformation("Queued Soulseek search \"{Query}\" ({Key})", target.QueryText, target.Key);
             }
 
             if (target.State == SearchJobState.Queued)
@@ -207,6 +223,11 @@ public sealed class SearchCoordinator(
             _gate.Release();
         }
     }
+
+    private static string Age(TimeSpan age) =>
+        age < TimeSpan.FromMinutes(1) ? Invariant($"{age.TotalSeconds:0}s")
+        : age < TimeSpan.FromHours(1) ? Invariant($"{age.TotalMinutes:0}m")
+        : Invariant($"{age.TotalHours:0.#}h");
 
     private static void Requeue(SearchJobEntity job, IMediaProfile p, SearchRequest r, DateTimeOffset now)
     {

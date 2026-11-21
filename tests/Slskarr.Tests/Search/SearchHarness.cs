@@ -1,6 +1,5 @@
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.DependencyInjection;
-using Microsoft.Extensions.Logging.Abstractions;
 using Microsoft.Extensions.Options;
 using Microsoft.Extensions.Time.Testing;
 using Shouldly;
@@ -40,11 +39,13 @@ public sealed class SearchHarness : IDisposable
         Slskd = new FakeSearchSlskd(Time);
         Registry = new ProfileRegistry([Profile(Options), new MusicProfile(Options)]);
         Throttle = new SearchThrottle(Options);
-        Coordinator = new SearchCoordinator(Registry, Db, Options, Throttle, Time);
+        Coordinator = new SearchCoordinator(Registry, Db, Options, Throttle, Time, Logs.For<SearchCoordinator>());
         Worker = NewWorker(Coordinator, Throttle);
     }
 
     public FakeTimeProvider Time { get; } = new(Start);
+
+    public LogCapture Logs { get; } = new();
 
     public IOptions<SlskarrOptions> Options { get; }
 
@@ -87,12 +88,12 @@ public sealed class SearchHarness : IDisposable
     public SearchWorker Restart()
     {
         var throttle = new SearchThrottle(Options);
-        Worker = NewWorker(new SearchCoordinator(Registry, Db, Options, throttle, Time), throttle);
+        Worker = NewWorker(new SearchCoordinator(Registry, Db, Options, throttle, Time, Logs.For<SearchCoordinator>()), throttle);
         return Worker;
     }
 
     private SearchWorker NewWorker(SearchCoordinator coordinator, SearchThrottle throttle) =>
-        new(coordinator, throttle, Registry, new Ranker(), Slskd, Db, Options, Time, NullLogger<SearchWorker>.Instance);
+        new(coordinator, throttle, Registry, new Ranker(), Slskd, Db, Options, Time, Logs.For<SearchWorker>());
 
     public List<SearchJobEntity> Jobs()
     {

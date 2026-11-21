@@ -38,7 +38,8 @@ public class SearchWorkerTests
         var profile = new StubProfile(_ => candidates);
         var registry = new ProfileRegistry([profile]);
         var throttle = new SearchThrottle(h.Options);
-        var coordinator = new SearchCoordinator(registry, h.Db, h.Options, throttle, h.Time);
+        var coordinator = new SearchCoordinator(registry, h.Db, h.Options, throttle, h.Time,
+            Microsoft.Extensions.Logging.Abstractions.NullLogger<SearchCoordinator>.Instance);
         var worker = new SearchWorker(coordinator, throttle, registry, new Ranker(), h.Slskd, h.Db, h.Options, h.Time,
             Microsoft.Extensions.Logging.Abstractions.NullLogger<SearchWorker>.Instance);
         var search = coordinator.SearchAsync(new SearchRequest("album", null, null, []), CancellationToken.None);

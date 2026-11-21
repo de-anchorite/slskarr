@@ -1,6 +1,5 @@
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.DependencyInjection;
-using Microsoft.Extensions.Logging.Abstractions;
 using Microsoft.Extensions.Options;
 using Microsoft.Extensions.Time.Testing;
 using Slskarr.Configuration;
@@ -41,13 +40,15 @@ public sealed class DownloadHarness : IDisposable
 
         Slskd = new FakeDownloadSlskd();
         Status = new FileManagementStatus();
-        Manager = new DownloadManager(Db, Slskd, Time, Status, NullLogger<DownloadManager>.Instance);
-        Monitor = new DownloadMonitor(Db, Slskd, Options, Time, NullLogger<DownloadMonitor>.Instance);
+        Manager = new DownloadManager(Db, Slskd, Time, Status, Logs.For<DownloadManager>());
+        Monitor = new DownloadMonitor(Db, Slskd, Options, Time, Logs.For<DownloadMonitor>());
     }
 
     public const string MusicCategory = "music";
 
     public FakeTimeProvider Time { get; } = new(Start);
+
+    public LogCapture Logs { get; } = new();
 
     public IOptions<SlskarrOptions> Options { get; }
 
@@ -63,7 +64,7 @@ public sealed class DownloadHarness : IDisposable
 
     /// <summary>Simulates a process restart for the monitor: a new instance, constructed at the current fake time.</summary>
     public void RestartMonitor() =>
-        Monitor = new DownloadMonitor(Db, Slskd, Options, Time, NullLogger<DownloadMonitor>.Instance);
+        Monitor = new DownloadMonitor(Db, Slskd, Options, Time, Logs.For<DownloadMonitor>());
 
     public const string IncompleteFile = "peer/Books/Frank Herbert/Frank Herbert - Dune (1965).epub";
 
