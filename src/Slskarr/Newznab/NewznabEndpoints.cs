@@ -14,6 +14,7 @@ public static class NewznabEndpoints
 {
     private const string Rss = "application/rss+xml";
     private const int MaxLimit = 100;
+    private const string LogCategory = "Slskarr.Newznab";
 
     public static IEndpointRouteBuilder MapNewznab(this IEndpointRouteBuilder app)
     {
@@ -28,8 +29,10 @@ public static class NewznabEndpoints
         SearchCoordinator coordinator,
         IDbContextFactory<SlskarrDb> dbFactory,
         TimeProvider time,
+        ILoggerFactory loggers,
         CancellationToken ct)
     {
+        var logger = loggers.CreateLogger(LogCategory);
         var apiKey = options.Value.ApiKey;
         if (!ApiKeyCheck.IsValid(req, apiKey))
         {
@@ -52,6 +55,9 @@ public static class NewznabEndpoints
                 var offset = ParseInt(q["offset"], 0, 0, int.MaxValue);
                 var limit = ParseInt(q["limit"], MaxLimit, 1, MaxLimit);
                 var hits = await FindAsync(search, offset, limit, registry, coordinator, ct);
+                // RSS polls come every few minutes from every *arr: not worth an Information line each.
+                logger.Log(search.IsRss ? LogLevel.Debug : LogLevel.Information,
+                    "Newznab t={Function} {Request}: {Count} release(s) (offset {Offset})", function, Describe(search), hits.Count, offset);
                 // An empty first RSS page gets one placeholder so *arr/Prowlarr connection tests pass.
                 var placeholderProfile = search.IsRss && offset == 0 && hits.Count == 0
                     ? RssAllProfiles(search) ? registry.All.FirstOrDefault() : registry.ForRequest(search)
@@ -64,9 +70,14 @@ public static class NewznabEndpoints
                 await using (var db = await dbFactory.CreateDbContextAsync(ct))
                 {
                     var hit = string.IsNullOrEmpty(id) ? null : await db.Hits.AsNoTracking().SingleOrDefaultAsync(h => h.Id == id, ct);
-                    return hit is null
-                        ? Error(300, "No such item")
-                        : Results.File(StubNzb.Build(hit), "application/x-nzb", XmlText.Clean(hit.ReleaseTitle) + ".nzb");
+                    if (hit is null)
+                    {
+                        logger.LogWarning("NZB requested for unknown release {Id} (expired, pruned or the placeholder)", id);
+                        return Error(300, "No such item");
+                    }
+
+                    logger.LogInformation("NZB requested (grab): {Title} from {User} ({Id})", hit.ReleaseTitle, hit.Username, hit.Id);
+                    return Results.File(StubNzb.Build(hit), "application/x-nzb", XmlText.Clean(hit.ReleaseTitle) + ".nzb");
                 }
 
             default:
@@ -94,6 +105,27 @@ public static class NewznabEndpoints
 
     // A generic t=search RSS poll without categories (Prowlarr's test) covers every profile.
     private static bool RssAllProfiles(SearchRequest s) => s.Categories.Count == 0 && s.Function is null or "search";
+
+    /// <summary>The non-empty search parameters, e.g. <c>artist="Radiohead" album="OK Computer" cat=3000</c>.</summary>
+    private static string Describe(SearchRequest s)
+    {
+        var parts = new List<string>();
+        void Add(string name, string? value)
+        {
+            if (value is not null)
+            {
+                parts.Add($"{name}=\"{value}\"");
+            }
+        }
+
+        Add("q", s.Query);
+        Add("author", s.Author);
+        Add("title", s.Title);
+        Add("artist", s.Artist);
+        Add("album", s.Album);
+        parts.Add("cat=" + (s.Categories.Count == 0 ? "(none)" : string.Join(',', s.Categories)));
+        return string.Join(' ', parts);
+    }
 
     private static IResult Error(int code, string description) => Results.Bytes(NewznabXml.Error(code, description), Rss);
 

@@ -47,17 +47,20 @@ public sealed class DownloadManager(
                 .FirstOrDefaultAsync(j => j.HitId == hitId && j.State != DownloadState.Deleted, ct);
             if (existing is not null)
             {
+                logger.LogInformation("Add of {Title}: already a {State} download ({Job})", existing.Title, existing.State, existing.Id);
                 return new AddResult(true, NzoId(existing.Id), null);
             }
 
             var hit = await db.Hits.AsNoTracking().Include(h => h.Files).FirstOrDefaultAsync(h => h.Id == hitId, ct);
             if (hit is null)
             {
+                logger.LogWarning("Add refused: release {HitId} expired or unknown", hitId);
                 return new AddResult(false, null, "Release expired or unknown");
             }
 
             if (hit.Files.Count == 0)
             {
+                logger.LogWarning("Add refused: release {Title} ({HitId}) has no files", hit.ReleaseTitle, hitId);
                 return new AddResult(false, null, "Release has no files");
             }
 
@@ -90,15 +93,18 @@ public sealed class DownloadManager(
             {
                 await EnqueueAsync(job);
             }
-            catch
+            catch (Exception ex)
             {
                 // slskd has no batch for it (or could not say): leave no half-created job so the *arr's retry starts clean.
+                logger.LogWarning("Add of {Title} from {User} failed, nothing queued: slskd did not take it: {Error}",
+                    job.Title, job.Username, ex.Message);
                 db.DownloadJobs.Remove(job);
                 await db.SaveChangesAsync(CancellationToken.None);
                 throw;
             }
 
             await db.SaveChangesAsync(CancellationToken.None);
+            LogEnqueued(job, "Queued download");
             return new AddResult(true, NzoId(job.Id), null);
         }
         finally
@@ -131,6 +137,8 @@ public sealed class DownloadManager(
         await RemoveTransfersAsync(job, job.Files, ct);
         job.State = DownloadState.Deleted;
         await db.SaveChangesAsync(ct);
+        logger.LogInformation("Removed {Title} ({Job}) at the *arr's request; it was {State}, files {Files}",
+            job.Title, job.Id, wasState, deleteFiles ? "deleted" : "kept");
 
         if (deleteFiles)
         {
@@ -223,6 +231,7 @@ public sealed class DownloadManager(
                 return new AddResult(false, nzoId, "slskd unavailable: could not remove the old transfers; try again later");
             }
 
+            logger.LogInformation("Retrying {Title} ({Job}), which failed with: {Error}", job.Title, job.Id, job.FailMessage);
             var batches = AssignBatches(job.Files.Select(f => f.Subdir), Guid.NewGuid());
             job.State = DownloadState.Queued;
             job.BytesDone = 0;
@@ -242,14 +251,38 @@ public sealed class DownloadManager(
             }
 
             // Throws, saving nothing (the job stays Failed), only when slskd has no batch for the retry.
-            await EnqueueAsync(job);
+            try
+            {
+                await EnqueueAsync(job);
+            }
+            catch (Exception ex)
+            {
+                logger.LogWarning("Retry of {Title} ({Job}) failed, it stays failed: slskd did not take it: {Error}", job.Title, job.Id, ex.Message);
+                throw;
+            }
+
             await db.SaveChangesAsync(CancellationToken.None);
+            LogEnqueued(job, "Re-queued download");
             return new AddResult(true, NzoId(job.Id), null);
         }
         finally
         {
             _gate.Release();
         }
+    }
+
+    /// <summary>After an enqueue: the job is either queued in slskd or already failed (slskd refused a batch).</summary>
+    private void LogEnqueued(DownloadJobEntity job, string what)
+    {
+        if (job.State == DownloadState.Failed)
+        {
+            logger.LogWarning("slskd refused {Title} from {User} ({Job}): {Error}", job.Title, job.Username, job.Id, job.FailMessage);
+            return;
+        }
+
+        logger.LogInformation("{What} {Job}: {Title} from {User}, {Files} file(s) in {Batches} batch(es), {Size:0.0} MB, category {Category}",
+            what, job.Id.ToString("N"), job.Title, job.Username, job.Files.Count, job.Files.Select(f => f.BatchId).Distinct().Count(),
+            job.Size / 1_000_000.0, job.Category);
     }
 
     /// <summary>One batch id per distinct subdir (one slskd batch per disc folder); the first takes <paramref name="first"/>.</summary>

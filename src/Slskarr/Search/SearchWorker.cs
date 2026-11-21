@@ -295,6 +295,7 @@ public sealed class SearchWorker(
         SearchJobEntity job, IMediaProfile profile, SearchRequest request, CancellationToken ct)
     {
         var started = time.GetUtcNow();
+        logger.LogInformation("Searching Soulseek for \"{Query}\" ({Key})", job.QueryText, job.Key);
         var id = await slskd.StartSearchAsync(job.QueryText, _options.SlskdSearchTimeoutSeconds, _options.ResponseLimit, ct);
         await using (var db = await dbFactory.CreateDbContextAsync(ct))
         {
@@ -332,8 +333,11 @@ public sealed class SearchWorker(
             return Disappeared;
         }
 
-        var ranked = ranker.Rank(profile.ToCandidates(search.Responses ?? []), request, profile, profile.Ranking, _options.ResultCap);
+        var responses = search.Responses ?? [];
+        var candidates = profile.ToCandidates(responses);
+        var ranked = ranker.Rank(candidates, request, profile, profile.Ranking, _options.ResultCap);
         await CompleteAsync(job.Key, ranked, ct);
+        LogSummary(job, responses, candidates.Count, ranked, time.GetUtcNow() - started);
 
         try
         {
@@ -345,6 +349,28 @@ public sealed class SearchWorker(
         }
 
         return null;
+    }
+
+    private const int SummaryTop = 5;
+
+    /// <summary>One line with the counts at each stage, then the best few releases, so a missing grab can be traced.</summary>
+    private void LogSummary(
+        SearchJobEntity job, IReadOnlyList<SlskdSearchResponse> responses, int candidates, IReadOnlyList<ReleaseCandidate> ranked, TimeSpan took)
+    {
+        if (!logger.IsEnabled(LogLevel.Information))
+        {
+            return;
+        }
+
+        logger.LogInformation(
+            "Search \"{Query}\" done in {Seconds:0}s: {Responses} peer response(s), {Files} file(s), {Candidates} release(s), {Kept} kept",
+            job.QueryText, took.TotalSeconds, responses.Count, responses.Sum(r => r.Files.Count), candidates, ranked.Count);
+        for (var i = 0; i < Math.Min(SummaryTop, ranked.Count); i++)
+        {
+            var c = ranked[i];
+            logger.LogInformation("  #{Rank} {Title} from {User}: {Files} file(s), {Size:0.0} MB, free slot {FreeSlot}, queue {Queue}",
+                i + 1, c.ReleaseTitle, c.Username, c.Files.Count, c.Size / 1_000_000.0, c.FreeSlot ? "yes" : "no", c.QueueLength);
+        }
     }
 
     /// <summary>

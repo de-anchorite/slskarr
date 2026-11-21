@@ -182,6 +182,26 @@ rewrite the prefix Slskarr reports, or use a Remote Path Mapping in the *arr.
 A slskd hosted on **Windows** replaces `: * ? " < > |` in file names with `_`, so reported storage
 paths may not match the files on disk. Linux/Docker slskd is not affected.
 
+## Logs and troubleshooting
+
+Slskarr logs each step from an *arr request to an imported download (`docker logs slskarr`):
+
+1. `Newznab t=music artist="…" album="…" cat=…: N release(s)`: what the *arr asked and how many releases it got.
+2. `Queued Soulseek search "…"`, `Searching Soulseek for "…"`, then
+   `Search "…" done in Ns: P peer response(s), F file(s), R release(s), K kept`, followed by the top five
+   releases (title, peer, size, free slot, queue). Repeated requests show `cached` instead.
+3. `NZB requested (grab): <title>`: the *arr chose a release. **If searches return releases but this line
+   never appears, the *arr rejected them all.** Check its interactive search for the rejection reasons
+   (quality profile, release name, size).
+4. `Queued download <job>: <title> from <peer>, …`: the SABnzbd add reached slskd. A refused add logs a
+   warning with the reason (unknown category, slskd refusal, slskd unreachable).
+5. State changes: the first queue position, `Downloading …`, `Completed …; the *arr imports it from <path>`, or
+   `Download … failed: <reason>`. If the *arr does not import after `Completed`, compare that path with
+   the *arr's view of the downloads folder (see Path mapping).
+
+RSS polls and later queue-position moves are logged at Debug. To see them, set
+`Logging__LogLevel__Slskarr=Debug`.
+
 ## Development
 
 Requires the .NET 10 SDK.
